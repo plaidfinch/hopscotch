@@ -312,6 +312,7 @@ impl<T> TaggedBuffer<T> {
         // Decrement the forward distance for first_with_tag of every
         // event tag *except* the current
         let mut popped_tag = None;
+        let first_with_tag_len = self.first_with_tag.len();
         self.first_with_tag.retain(|k, dist| {
             if popped.has_tag(*k) {
                 *dist = popped.next_with_tag;
@@ -331,6 +332,10 @@ impl<T> TaggedBuffer<T> {
                 false // drop this thing
             }
         });
+        // Shrink the first_with_tag hashmap if necessary
+        if first_with_tag_len != self.first_with_tag.len() {
+            self.first_with_tag.shrink_to_fit();
+        }
         // Clear the vec but retain its memory
         popped.previous_with_tag.clear();
         // Bump the offset because we just shifted the queue
