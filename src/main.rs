@@ -1,9 +1,10 @@
-use std::collections::VecDeque;
+use std::collections::{VecDeque, HashMap};
 use std::convert::TryInto;
 use std::io;
+use std::cmp::Ordering;
 
-mod distance;
-use distance::{Distance, INFINITY};
+mod sparse;
+use sparse::Sparse;
 
 fn main() {
     let mut count = 0;
@@ -69,17 +70,10 @@ fn main() {
 /// a fixed set of tags in use in the queue, these methods run in time
 /// proportionate to the number of tags queried, and constant relative to the
 /// size of the queue and the distance between successive items of the same tag.
-///
-/// **Important:** `TaggedBuffer`s use a "dense" representation to support very
-/// fast lookup, but this means they are only memory-efficient when the set of
-/// tags is itself small and dense. That is, the memory used by an item in a
-/// `TaggedBuffer` is proportionate to the *value* of its tag: so, for instance,
-/// an item with tag `1_000_000` will consume approximately 1 MB of space,
-/// whereas an item with tag `1` will consume a handful of bytes.
 #[derive(Debug, Clone)]
 pub struct TaggedBuffer<T> {
     offset: u64,
-    first_with_tag: Vec<Distance>,
+    first_with_tag: HashMap<usize, usize>,
     queue: VecDeque<InternalItem<T>>,
 }
 
@@ -97,13 +91,13 @@ pub struct Item<T> {
 #[derive(Debug, Clone)]
 struct InternalItem<T> {
     value: T,
-    next_with_tag: Distance,
-    previous_with_tag: Vec<Distance>,
+    next_with_tag: usize,
+    previous_with_tag: Sparse<usize>,
 }
 
 impl<T> InternalItem<T> {
     fn has_tag(&self, tag: usize) -> bool {
-        if let Some(Distance(0)) = self.previous_with_tag.get(tag) {
+        if let Some(0) = self.previous_with_tag.get(tag) {
             true
         } else {
             false
@@ -136,8 +130,8 @@ macro_rules! get_impl {
                     $(, $mutability)?)?;
             // Determine the tag of the item
             let mut tag = None;
-            for (t, Distance(d)) in previous_with_tag.iter().copied().enumerate() {
-                if d == 0 {
+            for (t, d) in previous_with_tag {
+                if *d == 0 {
                     tag = Some(t);
                     break;
                 }
@@ -171,18 +165,17 @@ macro_rules! get_from_or_after_impl {
                                 // If we requested the exclusively-after event,
                                 // we should look to the next event of this tag
                                 // rather than this event itself
-                                index + current.next_with_tag
+                                index.saturating_add(current.next_with_tag)
                             } else {
                                 index
                             }
                         } else {
                             // Get the distance backwards to the previous of
                             // this tag.
-                            let distance =
-                                current.previous_with_tag.get(tag)
-                                .unwrap_or(&INFINITY);
+                            let distance = current.previous_with_tag.get(tag)
+                                .unwrap_or(&usize::max_value());
                             // Get the index of the previous of this tag
-                            if let Some(previous_index) = index - *distance {
+                            if let Some(previous_index) = index.checked_sub(*distance) {
                                 // If index is >= 0, then find index of the next
                                 // of tag. This will be ahead of the current
                                 // index, because next_k(previous_k(current_k'))
@@ -190,16 +183,19 @@ macro_rules! get_from_or_after_impl {
                                 // else previous_k should have been next_k, a
                                 // contradiction.
                                 $self.queue.get(previous_index)
-                                    .map_or(0 + INFINITY,
-                                            |item| index + item.next_with_tag - 1)
+                                    .map_or(usize::max_value(), |item| {
+                                        index.saturating_add(
+                                            item.next_with_tag.checked_sub(1)
+                                                .expect("next_with_tag field should never be zero")
+                                        )})
                             } else {
                                 // If previous_index is < 0, then find index of
                                 // the first of this tag. This case happens when
                                 // there were no preceding events of the
                                 // particular tag, but there might be ones in
                                 // the future of it.
-                                0 + *$self.first_with_tag.get(tag)
-                                    .unwrap_or(&INFINITY)
+                                *$self.first_with_tag.get(&tag)
+                                    .unwrap_or(&usize::max_value())
                             }
                         })
                     }).min_by_key(|(_, i)| i.clone())?
@@ -207,7 +203,7 @@ macro_rules! get_from_or_after_impl {
                     // If the index requested lies before the buffer, pick whichever
                     // event in the set of tags happened first in the buffer
                     $tags.iter().copied()
-                        .filter_map(|tag| Some((tag, 0usize + *$self.first_with_tag.get(tag)?)))
+                        .filter_map(|tag| Some((tag, *$self.first_with_tag.get(&tag)?)))
                         .min_by_key(|(_, i)| i.clone())?
                 };
             // Get the item at the minimum index and return its exterior-facing
@@ -216,7 +212,8 @@ macro_rules! get_from_or_after_impl {
             Some(Item {
                 value: & $($mutability)? item.value,
                 tag: next_index_tag,
-                index: next_index as u64 + $self.offset
+                index: (next_index as u64).checked_add($self.offset)
+                    .expect("Buffer index overflow")
             })
         }
     };
@@ -232,7 +229,7 @@ impl<T> TaggedBuffer<T> {
     pub fn with_capacity(capacity: usize) -> TaggedBuffer<T> {
         TaggedBuffer {
             offset: 0,
-            first_with_tag: Vec::new(),
+            first_with_tag: HashMap::with_capacity(capacity),
             queue: VecDeque::with_capacity(capacity)
         }
     }
@@ -245,7 +242,14 @@ impl<T> TaggedBuffer<T> {
     /// The index which will be assigned to the next item to be added to the
     /// buffer, whenever it is added.
     pub fn next_index(&self) -> u64 {
-        self.offset + self.queue.len() as u64
+        self.offset.checked_add(self.queue.len() as u64)
+            .expect("Buffer index overflow")
+    }
+
+    /// The first index which is still stored in the buffer (each `pop`
+    /// increments this value by 1).
+    pub fn first_index(&self) -> u64 {
+        self.offset
     }
 
     /// Clear the contents of the buffer without de-allocating the queue's
@@ -292,27 +296,13 @@ impl<T> TaggedBuffer<T> {
 
     /// Pop an item off the back of the buffer and return it.
     pub fn pop(&mut self) -> Option<Item<T>> {
-        let old_length = self.first_with_tag.len();
         let result = self.pop_and_reclaim()?.0;
-        // Trim the length of first_with_tag, since it may not need to be as
-        // long anymore if the popped item was the maximum width one in the
-        // queue. We can always trim the first_with_tag like this, because its
-        // non-INFINITY prefix is always exactly the length of that of the front
-        // of the queue, since they need to point to the same tags.
-        self.first_with_tag.truncate(if let Some(i) = self.queue.front() {
-            i.previous_with_tag.len()
-        } else {
-            0
-        });
-        if old_length != self.first_with_tag.len() {
-            self.first_with_tag.shrink_to_fit();
-        }
         Some(result)
     }
 
     /// Pop an item off the buffer and reclaim the memory it used, so we can
     /// avoid needless allocations. This is an internal-only function.
-    fn pop_and_reclaim(&mut self) -> Option<(Item<T>, Vec<Distance>)> {
+    fn pop_and_reclaim(&mut self) -> Option<(Item<T>, Sparse<usize>)> {
         // The index of the thing that's about to get popped is equal to
         // the current offset, because the offset is incremented exactly
         // every time something is popped:
@@ -322,10 +312,10 @@ impl<T> TaggedBuffer<T> {
         // Decrement the forward distance for first_with_tag of every
         // event tag *except* the current
         let mut popped_tag = None;
-        for (k, dist) in self.first_with_tag.iter_mut().enumerate() {
-            if popped.has_tag(k) {
+        self.first_with_tag.retain(|k, dist| {
+            if popped.has_tag(*k) {
                 *dist = popped.next_with_tag;
-                popped_tag = Some(k);
+                popped_tag = Some(*k);
             }
             // It's safe to .unwrap() below because:
             // - if popped.has_tag(k), then *dist = popped.next_with_tag
@@ -334,12 +324,17 @@ impl<T> TaggedBuffer<T> {
             // - if !popped.has_tag(k), then *dist > 0 because *dist
             //   should always hold the index of the thing with tag k,
             //   and we know that the thing at index 0 is not with tag k
-            *dist = (*dist - Distance(1)).unwrap();
-        }
+            if *dist != usize::max_value() {
+                *dist = dist.checked_sub(1).unwrap();
+                true // keep this thing
+            } else {
+                false // drop this thing
+            }
+        });
         // Clear the vec but retain its memory
         popped.previous_with_tag.clear();
         // Bump the offset because we just shifted the queue
-        self.offset += 1;
+        self.offset = self.offset.checked_add(1).expect("Buffer index overflow");
         // Return the pieces
         Some((Item {
             value: popped.value,
@@ -367,26 +362,16 @@ impl<T> TaggedBuffer<T> {
     fn push_and_maybe_pop(
         &mut self, tag: usize, value: T, also_pop: bool
     ) -> (u64, Option<Item<T>>) {
-        // Grow the first_with_tag vector if the tag is too big
-        if tag >= self.width() {
-            self.first_with_tag.reserve(self.width().saturating_sub(tag));
-            for _ in self.width() ..= tag {
-                self.first_with_tag.push(INFINITY)
-            }
-        }
         // Calculate the backward distance to the previous of this tag.
         let distance_to_previous =
             self.queue.back().and_then(|latest| {
-                latest.previous_with_tag.get(tag).cloned()
-            }).unwrap_or(INFINITY) + Distance(1);
+                latest.previous_with_tag.get(tag).copied()
+            }).unwrap_or(usize::max_value()).saturating_add(1);
         // Find the previous of this tag, if any, and set its next_with_tag
         // pointer to point to this new item
-        if let Some(item) =
-            (self.queue.len() - distance_to_previous)
+        self.queue.len().checked_sub(distance_to_previous)
             .and_then(|i| self.queue.get_mut(i))
-        {
-            item.next_with_tag = distance_to_previous;
-        }
+            .map(|item| item.next_with_tag = distance_to_previous);
         // Get a fresh vector for tracking the distance to all previous events,
         // either by reclaiming memory of the least recent event (if directed to
         // pop) or by allocating a new one.
@@ -395,120 +380,132 @@ impl<T> TaggedBuffer<T> {
                 if let Some((item, vec)) = self.pop_and_reclaim() {
                     (Some(item), vec)
                 } else {
-                    (None, Vec::new())
+                    (None, Sparse::new())
                 }
             } else {
-                (None, Vec::new())
+                (None, Sparse::new())
             };
         // Populate the vector with the relative backward distances to the
-        // previous events of each tag, omitting any trailing string of
-        // INFINITY's, to save space.
+        // previous events of each tag.
         if let Some(latest) = self.queue.back() {
-            let mut deferred = 0; // track how many INFINITY we have yet to add
-            for t in 0 .. self.width() {
-                // The distance to the previous thing of this tag, or INFINITY
-                // if there is none in the buffer anymore
-                let dist = if t == tag {
-                    Distance(0)
-                } else {
-                    if let Some(latest_dist) = latest.previous_with_tag.get(t) {
-                        let dist = *latest_dist + Distance(1);
-                        if dist > Distance(self.queue.len()) {
-                            INFINITY
-                        } else {
-                            dist
+            let mut last_inserted = None;
+            let skip_to = move |last: Option<usize>, t: usize| {
+                match last {
+                    None => t,
+                    Some(i) => t - i - 1 // we know t > i (strictly) here
+                }
+            };
+            let mut tag_inserted = false;
+            let previous_distances = latest.previous_with_tag.iter();
+            for (t, dist) in previous_distances {
+                match t.cmp(&tag) {
+                    Ordering::Less => {
+                        if *dist < self.queue.len() {
+                            previous_with_tag.skip(skip_to(last_inserted, t));
+                            previous_with_tag.push(dist.saturating_add(1));
+                            last_inserted = Some(t);
                         }
-                    } else {
-                        INFINITY
+                    },
+                    Ordering::Equal => {
+                        previous_with_tag.skip(skip_to(last_inserted, tag));
+                        previous_with_tag.push(0);
+                        tag_inserted = true;
+                        last_inserted = Some(tag);
+                    },
+                    Ordering::Greater => {
+                        if !tag_inserted {
+                            previous_with_tag.skip(skip_to(last_inserted, tag));
+                            previous_with_tag.push(0);
+                            tag_inserted = true;
+                            last_inserted = Some(tag);
+                        }
+                        if *dist < self.queue.len() {
+                            previous_with_tag.skip(skip_to(last_inserted, t));
+                            previous_with_tag.push(dist.saturating_add(1));
+                            last_inserted = Some(t);
+                        }
                     }
-                };
-                // We omit any string of trailing INFINITY's at the end of a
-                // vector, to save memory
-                if dist == INFINITY {
-                    deferred += 1; // defer putting this in until we need to
-                } else {
-                    // add all deferred INFINITY's since we need to put a
-                    // non-INFINITY value into the vector
-                    for _ in 0 .. deferred { previous_with_tag.push(INFINITY) }
-                    deferred = 0;
-                    previous_with_tag.push(dist);
                 }
             }
+            if previous_with_tag.len() <= tag {
+                previous_with_tag.skip(skip_to(last_inserted, tag));
+                previous_with_tag.push(0);
+            }
         } else {
-            // Save memory by only pushing the INFINITY's *before* the zero here
-            for _ in 0 .. tag { previous_with_tag.push(INFINITY) }
-            previous_with_tag.push(Distance(0));
+            previous_with_tag.skip(tag);
+            previous_with_tag.push(0);
         }
         // Free memory from the given vec that isn't necessary anymore
         previous_with_tag.shrink_to_fit();
-        // Reclaim memory in first_with_tag that is no longer needed. There's a
-        // subtle invariant here which makes this okay: the initial
-        // (non-infinity) bit of the most recent previous_with_tag vec is always
-        // the same size as the initial such bit of the first_with_tag vec. Why?
-        // If it were not the case, then either first_with_tag would refer to
-        // some item not pointed to by previous_with_tag, or vice-versa.
-        if previous_with_tag.len() < self.first_with_tag.len() {
-            self.first_with_tag.truncate(previous_with_tag.len());
-            self.first_with_tag.shrink_to_fit();
-        }
         // Actually insert the item into the queue
         self.queue.push_back(InternalItem {
             value,
-            next_with_tag: INFINITY,
+            next_with_tag: usize::max_value(),
             previous_with_tag,
         });
         // Make sure first_with_tag tracks this event, if it is the current
         // first of its tag:
-        if let Some(first) = self.first_with_tag.get_mut(tag) {
-            if *first == INFINITY {
-                *first = Distance(self.queue.len() - 1)
-            }
+        if !self.first_with_tag.contains_key(&tag) {
+            self.first_with_tag.insert(tag, self.queue.len() - 1);
         }
         // Calculate the index of the just-inserted thing
-        (self.offset + (self.queue.len() as u64) - 1, popped_item)
-    }
-
-    /// The current width of the buffer, i.e. the maximum tag number that has
-    /// ever been encountered.
-    fn width(&self) -> usize {
-        self.first_with_tag.len()
+        (self.offset.checked_add(self.queue.len() as u64)
+         .expect("Buffer index overflow") - 1,
+         popped_item)
     }
 }
 
 impl<T: std::fmt::Display> std::fmt::Display for TaggedBuffer<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         let max_spaces =
-            format!("{}", self.first_with_tag.iter().max().unwrap_or(&Distance(0)).max(
-                &self.queue.iter().map(|i| {
-                    i.next_with_tag.max(*i.previous_with_tag.iter().max().unwrap_or(&Distance(0)))
-                }).max().unwrap_or(Distance(0))
-            )).len();
+            format!("{}", self.first_with_tag.values()
+                    .filter(|x| **x != usize::max_value())
+                    .max().unwrap_or(&0).max(
+                        &self.queue.iter().map(|i| {
+                            (if i.next_with_tag == usize::max_value() { 0 } else { i.next_with_tag })
+                                .max(*i.previous_with_tag.values()
+                                     .filter(|x| **x != usize::max_value())
+                                     .max().unwrap_or(&0))
+                        }).max().unwrap_or(0)
+                    )).len();
         let max_width =
             self.queue.iter().map(|i| i.previous_with_tag.len())
             .max().unwrap_or(0);
         let spaces = |f: &mut std::fmt::Formatter, s: String| {
             write!(f, "{}", s)?;
             for _ in 0 .. max_spaces.saturating_sub(s.len()) {
-                write!(f, " ")?
+                write!(f, "   ")?
             };
             Ok(())
+        };
+        let dist = |n: usize| {
+            if n != usize::max_value() {
+                format!("{}", n)
+            } else {
+                "∞".to_string()
+            }
         };
         for _ in 0 .. max_width {
             write!(f, " ")?;
             spaces(f, " ↱ ".to_string())?;
         }
         write!(f, " →")?;
-        for d in &self.first_with_tag {
-            write!(f, " ")?;
-            spaces(f, format!(" ↓{}", d))?;
+        for t in 0 .. max_width {
+            if let Some(d) = self.first_with_tag.get(&t) {
+                write!(f, " ")?;
+                spaces(f, format!(" ↓{}", dist(*d)))?;
+            } else {
+                write!(f, " ")?;
+                spaces(f, format!("  "))?;
+            }
         }
         for i in &self.queue {
             write!(f, "\n")?;
             for t in 0 .. max_width {
                 if let Some(d) = i.previous_with_tag.get(t) {
-                    if d > &Distance(0) {
+                    if *d > 0 {
                         write!(f, " ")?;
-                        spaces(f, format!(" ↑{}", d))?;
+                        spaces(f, format!(" ↑{}", dist(*d)))?;
                     } else {
                         spaces(f, format!(" ({})", t))?;
                     }
@@ -518,11 +515,11 @@ impl<T: std::fmt::Display> std::fmt::Display for TaggedBuffer<T> {
                 }
             }
             write!(f, " |")?;
-            for t in 0 .. self.width() {
+            for t in 0 .. max_width {
                 if let Some(d) = i.previous_with_tag.get(t) {
-                    if d == &Distance(0) {
+                    if *d == 0 {
                         write!(f, " ")?;
-                        spaces(f, format!(" ↓{}", i.next_with_tag))?;
+                        spaces(f, format!(" ↓{}", dist(i.next_with_tag)))?;
                     } else {
                         spaces(f, "  ⋮ ".to_string())?;
                     }
