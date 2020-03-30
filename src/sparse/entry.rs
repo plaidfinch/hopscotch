@@ -18,8 +18,39 @@ pub enum Entry<'a, T> {
 }
 
 impl<'a, T> Entry<'a, T> {
+    /// Set the value of the entry, and return the entry's old value, or `None`
+    /// if there was not a previous value.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use event_queue_demo::sparse::Sparse;
+    /// let mut s: Sparse<usize> = Sparse::new();
+    /// s.entry(2).insert(100);
+    /// assert_eq!(s.into_dense(), vec![None, None, Some(100)]);
+    /// ```
+    pub fn insert(self, value: T) -> Option<T> {
+        match self {
+            Entry::Occupied(mut entry) => Some(entry.insert(value)),
+            Entry::Vacant(entry) => {
+                entry.insert(value);
+                None
+            }
+        }
+    }
+
     /// Ensures a value is in the entry by inserting the default if empty, and
     /// returns a mutable reference to the value in the entry.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use event_queue_demo::sparse::Sparse;
+    /// let mut s: Sparse<usize> = Sparse::new();
+    /// *s.entry(2).or_insert(500) += 1;
+    /// *s.entry(2).or_insert(500) += 1;
+    /// assert_eq!(s.get(2), Some(&502));
+    /// ```
     pub fn or_insert(self, default: T) -> &'a mut T {
         match self {
             Entry::Occupied(entry) => entry.into_mut(),
@@ -30,6 +61,18 @@ impl<'a, T> Entry<'a, T> {
     /// Ensures a value is in the entry by inserting the result of the default
     /// function if empty, and returns a mutable reference to the value in the
     /// entry.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use event_queue_demo::sparse::Sparse;
+    /// let mut s: Sparse<usize> = Sparse::new();
+    /// let mut counter: usize = 0;
+    /// *s.entry(2).or_insert_with(|| { counter += 1; 500 }) += 1; // closure used
+    /// *s.entry(2).or_insert_with(|| { counter += 1; 500 }) += 1; // closure never used
+    /// assert_eq!(s.get(2), Some(&502));
+    /// assert_eq!(counter, 1);  // the counter is only incremented once
+    /// ```
     pub fn or_insert_with<F: FnOnce() -> T>(self, default: F) -> &'a mut T {
         match self {
             Entry::Occupied(entry) => entry.into_mut(),
@@ -38,6 +81,14 @@ impl<'a, T> Entry<'a, T> {
     }
 
     /// Returns the index to which this entry corresponds.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use event_queue_demo::sparse::Sparse;
+    /// let mut s: Sparse<usize> = Sparse::new();
+    /// assert_eq!(s.entry(2).index(), 2);
+    /// ```
     pub fn index(&self) -> usize {
         match self {
             Entry::Occupied(entry) => entry.index(),
@@ -47,19 +98,44 @@ impl<'a, T> Entry<'a, T> {
 
     /// Provides in-place mutable access to an occupied entry before any
     /// potential inserts into the sparse vector.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use event_queue_demo::sparse::Sparse;
+    /// let mut s: Sparse<usize> = Sparse::new();
+    /// s.entry(2).insert(100);
+    /// s.entry(2).and_modify(|n| *n += 1).or_insert(200);
+    /// s.entry(0).and_modify(|n| *n += 1).or_insert(200);
+    /// assert_eq!(s.get(0), Some(&200));
+    /// assert_eq!(s.get(2), Some(&101));
+    /// ```
     pub fn and_modify<F: FnOnce(&mut T)>(self, f: F) -> Self {
         match self {
             Entry::Occupied(mut entry) => {
                 f(entry.get_mut());
                 Entry::Occupied(entry)
-            },
+            }
             Entry::Vacant(entry) => Entry::Vacant(entry),
         }
     }
 
     /// Ensures a value is in the entry by inserting the default value if empty,
     /// and returns a mutable reference to the value in the entry.
-    pub fn or_default(self) -> &'a mut T where T: Default {
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use event_queue_demo::sparse::Sparse;
+    /// let mut s: Sparse<usize> = Sparse::new();
+    /// *s.entry(123).or_default() += 1;
+    /// *s.entry(123).or_default() += 1;
+    /// assert_eq!(s.get(123), Some(&2));
+    /// ```
+    pub fn or_default(self) -> &'a mut T
+    where
+        T: Default,
+    {
         self.or_insert(T::default())
     }
 }
@@ -96,7 +172,7 @@ impl<'a, T> OccupiedEntry<'a, T> {
 
     /// Get a reference to the value in the entry.
     pub fn get(&self) -> &T {
-        &self.values[self.indices[self.count]]
+        &self.values[self.count]
     }
 
     /// Get a mutable reference to the value in the entry.
@@ -104,7 +180,7 @@ impl<'a, T> OccupiedEntry<'a, T> {
     /// If you need a reference to the `OccupiedEntry` which may outlive the
     /// destruction of the `Entry` value, see `into_mut`.
     pub fn get_mut(&mut self) -> &mut T {
-        &mut self.values[self.indices[self.count]]
+        &mut self.values[self.count]
     }
 
     /// Convert the `OccupiedEntry` into a mutable reference to the value in the
@@ -112,7 +188,7 @@ impl<'a, T> OccupiedEntry<'a, T> {
     ///
     /// If you need multiple references to the `OccupiedEntry`, see `get_mut`.
     pub fn into_mut(self) -> &'a mut T {
-        &mut self.values[self.indices[self.count]]
+        &mut self.values[self.count]
     }
 
     /// Set the value of the entry, and return the entry's old value.
@@ -152,11 +228,14 @@ impl<'a, T> VacantEntry<'a, T> {
     /// Set the value of the entry at the `VacantEntry`'s index, and return a
     /// mutable reference to it.
     pub fn insert(self, value: T) -> &'a mut T {
-        if self.index > *self.end {
-            *self.end = self.index;
+        if self.index >= *self.end {
+            *self.end = self
+                .index
+                .checked_add(1)
+                .expect("index overflow in VacantEntry::insert");
         }
         self.indices.insert(self.count, self.index);
         self.values.insert(self.count, value);
-        &mut self.values[self.indices[self.count]]
+        &mut self.values[self.count]
     }
 }

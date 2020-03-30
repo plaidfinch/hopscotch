@@ -42,6 +42,19 @@ impl<T> Sparse<T> {
     }
 
     /// Append an element to the back of a `Sparse<T>`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use event_queue_demo::sparse::Sparse;
+    /// let mut s: Sparse<usize> = Sparse::new();
+    /// s.push(0);
+    /// assert_eq!(s.into_dense(), vec![Some(0)]);
+    /// ```
+    ///
+    /// # Panics
+    ///
+    /// When the length of the sparse vector exceeds `usize::max_value()`.
     pub fn push(&mut self, value: T) {
         self.indices.push(self.end);
         self.values.push(value);
@@ -53,6 +66,20 @@ impl<T> Sparse<T> {
     ///
     /// This differs from `Vec::pop` in that it may return `None` when the
     /// length is greater than zero.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use event_queue_demo::sparse::Sparse;
+    /// let mut s: Sparse<usize> = Sparse::new();
+    /// s.push(100);
+    /// s.skip(1);
+    /// s.push(200);
+    /// assert_eq!(s.pop(), Some(200));
+    /// assert_eq!(s.pop(), None);
+    /// assert_eq!(s.pop(), Some(100));
+    /// assert_eq!(s.pop(), None);
+    /// ```
     pub fn pop(&mut self) -> Option<T> {
         self.end = self.end.saturating_sub(1);
         if let Some(i) = self.indices.last() {
@@ -73,8 +100,23 @@ impl<T> Sparse<T> {
     ///
     /// This operation is constant-time, regardless of the size of `gap`.
     ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use event_queue_demo::sparse::Sparse;
+    /// let mut s: Sparse<usize> = Sparse::new();
+    /// s.skip(1);
+    /// s.push(100);
+    /// s.skip(2);
+    /// s.push(200);
+    /// s.skip(1);
+    /// assert_eq!(s.into_dense(), vec![None, Some(100), None, None, Some(200), None]);
+    /// ```
+    ///
+    /// # Panics
+    ///
     /// If this operation would cause the length of the collection to exceed
-    /// `usize::max_value()`, it panics.
+    /// `usize::max_value()`.
     pub fn skip(&mut self, gap: usize) {
         self.end = self.end.checked_add(gap).expect("Sparse::skip: overflow")
     }
@@ -85,6 +127,17 @@ impl<T> Sparse<T> {
     ///
     /// While `Vec::get` is constant-time, this operation is worst-case
     /// logarithmic in the length of the collection.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use event_queue_demo::sparse::Sparse;
+    /// let mut s: Sparse<usize> = Sparse::new();
+    /// s.skip(12345);
+    /// s.push(100);
+    /// assert_eq!(s.get(0), None);
+    /// assert_eq!(s.get(12345), Some(&100));
+    /// ```
     pub fn get(&self, index: usize) -> Option<&T> {
         self.values.get(self.indices.binary_search(&index).ok()?)
     }
@@ -94,8 +147,20 @@ impl<T> Sparse<T> {
     ///
     /// While `Vec::get` is constant-time, this operation is worst-case
     /// logarithmic in the length of the collection.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use event_queue_demo::sparse::Sparse;
+    /// let mut s: Sparse<usize> = Sparse::new();
+    /// s.skip(12345);
+    /// s.push(100);
+    /// s.get_mut(12345).map(|n| *n += 1);
+    /// assert_eq!(s.get(12345), Some(&101));
+    /// ```
     pub fn get_mut(&mut self, index: usize) -> Option<&mut T> {
-        self.values.get_mut(self.indices.binary_search(&index).ok()?)
+        self.values
+            .get_mut(self.indices.binary_search(&index).ok()?)
     }
 
     /// Return an `Entry` corresponding to the index specified, which may be
@@ -127,6 +192,18 @@ impl<T> Sparse<T> {
     ///
     /// Note that this method has no effect on the allocated capacity of the
     /// collection.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use event_queue_demo::sparse::Sparse;
+    /// let mut s: Sparse<usize> = Sparse::new();
+    /// s.push(1);
+    /// s.push(2);
+    /// s.push(3);
+    /// s.clear();
+    /// assert_eq!(s.into_dense(), vec![]);
+    /// ```
     pub fn clear(&mut self) {
         self.indices.clear();
         self.values.clear();
@@ -141,6 +218,18 @@ impl<T> Sparse<T> {
     ///
     /// This operation is constant-time, regardless of the size of the
     /// collection.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use event_queue_demo::sparse::Sparse;
+    /// let mut s: Sparse<usize> = Sparse::new();
+    /// s.skip(12345);
+    /// s.push(0);
+    /// s.skip(54321);
+    /// s.push(1);
+    /// assert_eq!(s.count(), 2);
+    /// ```
     pub fn count(&self) -> usize {
         self.indices.len()
     }
@@ -153,6 +242,18 @@ impl<T> Sparse<T> {
     ///
     /// This operation is constant-time, regardless of the size of the
     /// collection.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use event_queue_demo::sparse::Sparse;
+    /// let mut s: Sparse<usize> = Sparse::new();
+    /// s.skip(9999);
+    /// s.push(0);
+    /// s.skip(9999);
+    /// s.push(1);
+    /// assert_eq!(s.len(), 20000);
+    /// ```
     pub fn len(&self) -> usize {
         self.end
     }
@@ -161,14 +262,18 @@ impl<T> Sparse<T> {
     /// references to the elements to which they correspond, in ascending order
     /// of index.
     pub fn iter(&self) -> Iter<T> {
-        Iter { inner: self.indices.iter().copied().zip(self.values.iter()) }
+        Iter {
+            inner: self.indices.iter().copied().zip(self.values.iter()),
+        }
     }
 
     /// Return an iterator over the represented indices, paired with mutable
     /// references to the elements to which they correspond, in ascending order
     /// of index.
     pub fn iter_mut(&mut self) -> IterMut<T> {
-        IterMut { inner: self.indices.iter().copied().zip(self.values.iter_mut()) }
+        IterMut {
+            inner: self.indices.iter().copied().zip(self.values.iter_mut()),
+        }
     }
 
     /// Return an iterator over the indices which correspond to some element in
@@ -189,50 +294,43 @@ impl<T> Sparse<T> {
         self.values.iter_mut()
     }
 
+    /// Retains only the elements specified by the predicate.
+    ///
+    /// This method does not change the length of the resultant collection; it
+    /// only removes elements from it without changing the effective length.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use event_queue_demo::sparse::Sparse;
+    /// let mut s: Sparse<usize> = (0..4).zip(0..4).collect();
+    /// s.retain(|i, _| i % 2 == 0);
+    /// assert_eq!(s.into_dense(), vec![Some(0), None, Some(2), None]);
+    /// ```
+    pub fn retain<F>(&mut self, mut f: F)
+    where
+        F: FnMut(usize, &mut T) -> bool,
+    {
+        let mut offset = 0;
+        for count in 0..self.indices.len() {
+            let index = self.indices[count];
+            let value = self.values.get_mut(count).unwrap();
+            if f(index, value) {
+                self.values.swap(count, count - offset);
+                self.indices.swap(count, count - offset);
+            } else {
+                offset += 1;
+            }
+        }
+        self.indices.truncate(self.indices.len() - offset);
+        self.values.truncate(self.values.len() - offset);
+    }
+
     /// Shrink the capacity as much as possible, freeing currently unused
     /// memory.
     pub fn shrink_to_fit(&mut self) {
         self.indices.shrink_to_fit();
         self.values.shrink_to_fit();
-    }
-
-    /// Return an iterator of immutable references to all the values represented
-    /// in the collection, *including* those which have been skipped
-    /// (represented as `None`).
-    pub fn iter_dense(&self) -> IterDense<T> {
-        IterDense {
-            indices: &self.indices,
-            values: self.values.iter(),
-            end: self.end,
-            index: 0,
-        }
-    }
-
-    /// Return an iterator over mutable references to all the values represented
-    /// in the collection, *including* those which have been skipped
-    /// (represented as `None`).
-    ///
-    /// Note: this iterator does not allow removing or adding elements in the
-    /// collection, or changing indices of existing elements.
-    pub fn iter_dense_mut(&mut self) -> IterDenseMut<T> {
-        IterDenseMut {
-            indices: &self.indices,
-            values: self.values.iter_mut(),
-            end: self.end,
-            index: 0,
-        }
-    }
-
-    /// Return an iterator consuming the collection and returning all its
-    /// values, *including* those which have been skipped (represented as
-    /// `None`).
-    pub fn into_iter_dense(self) -> IntoIterDense<T> {
-        IntoIterDense {
-            indices: self.indices,
-            values: self.values.into_iter(),
-            end: self.end,
-            index: 0,
-        }
     }
 
     /// Convert this `Sparse<T>` into a `Vec<Option<T>>` where `None` fills the
@@ -245,7 +343,14 @@ impl<T> Sparse<T> {
     /// length `usize::max_value()`, which on most architectures is far too big
     /// to fit in RAM.
     pub fn into_dense(self) -> Vec<Option<T>> {
-        self.into_iter_dense().collect()
+        let mut result = Vec::with_capacity(self.end);
+        for _ in 0..self.end {
+            result.push(None);
+        }
+        for (i, a) in self.indices.into_iter().zip(self.values.into_iter()) {
+            result[i] = Some(a);
+        }
+        result
     }
 }
 
@@ -363,120 +468,8 @@ impl<T> IntoIterator for Sparse<T> {
     type IntoIter = IntoIter<T>;
 
     fn into_iter(self) -> Self::IntoIter {
-        IntoIter { inner: self.indices.into_iter().zip(self.values.into_iter()) }
-    }
-}
-
-// Iterating densely over `&T`
-
-/// An iterator over immutable references to all the items in a `Sparse`
-/// collection, including those which have been skipped (represented as `None`).
-///
-/// This is produced by `Sparse::iter_dense()`.
-pub struct IterDense<'a, T> {
-    indices: &'a [usize],
-    values: slice::Iter<'a, T>,
-    end: usize,
-    index: usize,
-}
-
-impl<'a, T> Iterator for IterDense<'a, T> {
-    type Item = Option<&'a T>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.index >= self.end {
-            None
-        } else {
-            let (first_index, rest_indices) = self.indices.split_first().unwrap();
-            let result = if self.index == *first_index {
-                let first_value = self.values.next().unwrap();
-                self.indices = rest_indices;
-                Some(first_value)
-            } else {
-                None
-            };
-            self.index += 1;
-            Some(result)
+        IntoIter {
+            inner: self.indices.into_iter().zip(self.values.into_iter()),
         }
-    }
-
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        (self.end, Some(self.end))
-    }
-}
-
-// Iterating densely over `&mut T`
-
-/// An iterator over mutable references to all the items in a `Sparse`
-/// collection, including those which have been skipped (represented as `None`).
-///
-/// This is produced by `Sparse::iter_dense_mut()`.
-pub struct IterDenseMut<'a, T> {
-    indices: &'a [usize],
-    values: slice::IterMut<'a, T>,
-    end: usize,
-    index: usize,
-}
-
-impl<'a, T> Iterator for IterDenseMut<'a, T> {
-    type Item = Option<&'a mut T>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.index >= self.end {
-            None
-        } else {
-            let (first_index, rest_indices) = self.indices.split_first().unwrap();
-            let result = if self.index == *first_index {
-                let first_value = self.values.next().unwrap();
-                self.indices = rest_indices;
-                Some(first_value)
-            } else {
-                None
-            };
-            self.index += 1;
-            Some(result)
-        }
-    }
-
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        (self.end, Some(self.end))
-    }
-}
-
-// Iterating densely over `T`
-
-/// An iterator over all the items in a `Sparse` collection, including those
-/// which have been skipped (represented as `None`).
-///
-/// This is produced by `Sparse::into_iter_dense()`.
-pub struct IntoIterDense<T> {
-    indices: Vec<usize>,
-    values: vec::IntoIter<T>,
-    end: usize,
-    index: usize,
-}
-
-impl<T> Iterator for IntoIterDense<T> {
-    type Item = Option<T>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.index >= self.end {
-            None
-        } else {
-            let first_index = self.indices.first().unwrap();
-            let result = if self.index == *first_index {
-                let first_value = self.values.next().unwrap();
-                self.indices.pop();
-                Some(first_value)
-            } else {
-                None
-            };
-            self.index += 1;
-            Some(result)
-        }
-    }
-
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        (self.end, Some(self.end))
     }
 }

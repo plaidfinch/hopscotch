@@ -1,6 +1,6 @@
 use event_queue_demo::sparse::*;
-use std::iter;
 use quickcheck::{quickcheck, Arbitrary, Gen};
+use std::iter;
 
 // We use random simulation testing to check that the operations over sparse
 // vectors correspond to equivalent operations over normal vectors of
@@ -44,7 +44,7 @@ impl<T: Arbitrary> Arbitrary for Operation<T> {
             12 => IterMutAndSet(Vec::arbitrary(g)),
             13 => ShrinkToFit,
             14 => Equal,
-            _ => panic!("Bad discriminant while generating operation!")
+            _ => panic!("Bad discriminant while generating operation!"),
         }
     }
 
@@ -55,16 +55,16 @@ impl<T: Arbitrary> Arbitrary for Operation<T> {
             Pop => Box::new(iter::empty()),
             Skip(gap) => Box::new(gap.shrink().map(Skip)),
             Get(index) => Box::new(index.shrink().map(Get)),
-            GetMutAndSet(index, new) => {
-                Box::new((index.clone(), new.clone())
-                        .shrink().map(|(i, n)| GetMutAndSet(i, n)))
-            },
+            GetMutAndSet(index, new) => Box::new(
+                (index.clone(), new.clone())
+                    .shrink()
+                    .map(|(i, n)| GetMutAndSet(i, n)),
+            ),
             Clear => Box::new(iter::empty()),
             Count => Box::new(iter::empty()),
             Len => Box::new(iter::empty()),
             Values => Box::new(iter::empty()),
-            ValuesMutAndSet(news) =>
-                Box::new(news.shrink().map(ValuesMutAndSet)),
+            ValuesMutAndSet(news) => Box::new(news.shrink().map(ValuesMutAndSet)),
             Indices => Box::new(iter::empty()),
             Iter => Box::new(iter::empty()),
             IterMutAndSet(news) => Box::new(news.shrink().map(IterMutAndSet)),
@@ -80,7 +80,7 @@ impl<T: Arbitrary> Arbitrary for Operation<T> {
 fn simulation_step<T: Clone + Eq>(
     o: Operation<T>,
     s: &mut Sparse<T>,
-    v: &mut Vec<Option<T>>
+    v: &mut Vec<Option<T>>,
 ) -> bool {
     use Operation::*;
     match o {
@@ -88,23 +88,22 @@ fn simulation_step<T: Clone + Eq>(
             s.push(val.clone());
             v.push(Some(val));
             true
-        },
+        }
         Pop => s.pop() == v.pop().unwrap_or(None),
         Skip(gap) => {
             s.skip(gap);
-            for _ in 0 .. gap {
+            for _ in 0..gap {
                 v.push(None);
             }
             true
-        },
+        }
         Get(i) => s.get(i) == v.get(i).unwrap_or(&None).as_ref(),
         GetMutAndSet(i, new) => {
-            let x: Option<&mut T> =
-                if let Some(Some(x)) = v.get_mut(i) {
-                    Some(x)
-                } else {
-                    None
-                };
+            let x: Option<&mut T> = if let Some(Some(x)) = v.get_mut(i) {
+                Some(x)
+            } else {
+                None
+            };
             let y: Option<&mut T> = s.get_mut(i);
             let equal_before = x == y;
             match (x, y) {
@@ -113,33 +112,34 @@ fn simulation_step<T: Clone + Eq>(
                     *y = new;
                     let equal_after = x == y;
                     equal_before && equal_after
-                },
+                }
                 (None, None) => equal_before,
                 _ => false,
             }
-        },
+        }
         Clear => {
             v.clear();
             s.clear();
             true
-        },
+        }
         Count => v.iter().filter(|x| x.is_some()).count() == s.count(),
         Len => v.len() == s.len(),
         Iter => {
             let s_values: Vec<(usize, &T)> = s.iter().collect();
-            let v_values: Vec<(usize, &T)> =
-                v.iter().enumerate().filter_map(|(i, v)| {
-                    if let Some(v) = v { Some((i, v)) } else { None }
-                }).collect();
+            let v_values: Vec<(usize, &T)> = v
+                .iter()
+                .enumerate()
+                .filter_map(|(i, v)| if let Some(v) = v { Some((i, v)) } else { None })
+                .collect();
             s_values == v_values
-        },
+        }
         IterMutAndSet(news) => {
-            let mut s_values: Vec<(usize, &mut T)> =
-                s.iter_mut().collect();
-            let mut v_values: Vec<(usize, &mut T)> =
-                v.iter_mut().enumerate().filter_map(|(i, v)| {
-                    if let Some(v) = v { Some((i, v)) } else { None }
-                }).collect();
+            let mut s_values: Vec<(usize, &mut T)> = s.iter_mut().collect();
+            let mut v_values: Vec<(usize, &mut T)> = v
+                .iter_mut()
+                .enumerate()
+                .filter_map(|(i, v)| if let Some(v) = v { Some((i, v)) } else { None })
+                .collect();
             let equal_before = s_values == v_values;
             for (index, new) in news.clone().into_iter() {
                 if let Some((_, v)) = s_values.get_mut(index) {
@@ -153,18 +153,15 @@ fn simulation_step<T: Clone + Eq>(
             }
             let equal_after = s_values == v_values;
             equal_before && equal_after
-        },
+        }
         Values => {
             let s_values: Vec<&T> = s.values().collect();
-            let v_values: Vec<&T> =
-                v.iter().filter_map(|v| v.as_ref()).collect();
+            let v_values: Vec<&T> = v.iter().filter_map(|v| v.as_ref()).collect();
             s_values == v_values
-        },
+        }
         ValuesMutAndSet(news) => {
-            let mut s_values: Vec<&mut T> =
-                s.values_mut().collect();
-            let mut v_values: Vec<&mut T> =
-                v.iter_mut().filter_map(|v| v.as_mut()).collect();
+            let mut s_values: Vec<&mut T> = s.values_mut().collect();
+            let mut v_values: Vec<&mut T> = v.iter_mut().filter_map(|v| v.as_mut()).collect();
             let equal_before = s_values == v_values;
             for (index, new) in news.clone().into_iter() {
                 if let Some(v) = s_values.get_mut(index) {
@@ -178,35 +175,47 @@ fn simulation_step<T: Clone + Eq>(
             }
             let equal_after = s_values == v_values;
             equal_before && equal_after
-        },
+        }
         Indices => {
             let s_indices: Vec<usize> = s.indices().collect();
-            let v_indices: Vec<usize> =
-                v.iter().enumerate().filter_map(|(i, v)| {
-                    if v.is_some() { Some(i) } else { None }
-                }).collect();
+            let v_indices: Vec<usize> = v
+                .iter()
+                .enumerate()
+                .filter_map(|(i, v)| if v.is_some() { Some(i) } else { None })
+                .collect();
             s_indices == v_indices
-        },
+        }
         ShrinkToFit => {
             s.shrink_to_fit();
             v.shrink_to_fit();
             true
-        },
-        Equal => {
-            *v == s.clone().into_dense_with(|_, v| v)
-        },
+        }
+        Equal => *v == s.clone().into_dense(),
     }
 }
 
 #[test]
 fn empty_is_empty() {
-    let v: Vec<usize> = Vec::new();
+    let v: Vec<Option<usize>> = Vec::new();
     let s = Sparse::new();
-    assert_eq!(v, s.into_dense(),
-               "Empty sparse vector, when converted to dense, must be empty")
+    assert_eq!(
+        v,
+        s.into_dense(),
+        "Empty sparse vector, when converted to dense, must be empty"
+    )
 }
 
 quickcheck! {
+    fn to_from_dense_identity(dense: Vec<Option<usize>>) -> bool {
+        let dense_0 = dense.clone();
+        println!("input: {:?}", dense_0);
+        let sparse: Sparse<usize> = dense.into_iter().collect();
+        println!("sparse: {:?}", sparse);
+        let dense_1 = sparse.into_dense();
+        println!("dense: {:?}", dense_1);
+        dense_0 == dense_1
+    }
+
     fn push_sparse_is_push_dense(xs: Vec<usize>) -> bool {
         let mut vec = Vec::with_capacity(xs.len());
         let mut sparse = Sparse::with_capacity(xs.len());
@@ -214,18 +223,21 @@ quickcheck! {
             vec.push(Some(x));
             sparse.push(x);
         }
-        let dense = sparse.into_dense_with(|_, v| v);
+        // println!("{:?}", sparse);
+        let dense = sparse.into_dense();
+        // println!("{:?}", dense);
+        // println!("{:?}", vec);
         vec == dense
     }
 
     fn skip_sparse_is_push_many_dense(gap: usize, split: usize, xs: Vec<usize>) -> bool {
         let (xs0, xs1) = xs.split_at(split % (xs.len() + 1));
         let mut sparse = Sparse::new();
-        let mut vec = Vec::new();
+        let mut vec: Vec<Option<usize>> = Vec::new();
         // Push the first half
         for x in xs0.iter().copied() {
             vec.push(Some(x));
-            sparse.push(Some(x));
+            sparse.push(x);
         }
         // Now skip some
         sparse.skip(gap);
@@ -235,9 +247,9 @@ quickcheck! {
         // Push the second half
         for x in xs1.iter().copied() {
             vec.push(Some(x));
-            sparse.push(Some(x));
+            sparse.push(x);
         }
-        let dense = sparse.into_dense_with_default(None);
+        let dense = sparse.into_dense();
         vec == dense
     }
 
