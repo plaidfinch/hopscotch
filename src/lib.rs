@@ -26,8 +26,8 @@ pub use sparse::Sparse;
 /// successive items of the same tag.
 ///
 /// This data structure performs best and uses the least memory when the set of
-/// tags is small and mostly unchanging across the lifetime of the buffer. A
-/// given buffer may use memory proportionate to the product of its length and
+/// tags is small and mostly unchanging across the lifetime of the queue. A
+/// given queue may use memory proportionate to the product of its length and
 /// the number of distinct tags within it.
 #[derive(Debug, Clone)]
 pub struct Queue<T> {
@@ -38,17 +38,17 @@ pub struct Queue<T> {
     values: VecDeque<T>,
 }
 
-/// An item from the buffer, either one that is currently in it, or one that has
-/// been removed, e.g. by `pop()`. For a buffer of values of type `T`, different
+/// An item from the queue, either one that is currently in it, or one that has
+/// been removed, e.g. by `pop()`. For a queue of values of type `T`, different
 /// methods will return `Item<T>`, `Item<&T>` and `Item<&mut T>`, as appropriate
 /// to the borrowing properties of that method.
 #[derive(Debug, Clone, PartialEq, PartialOrd, Eq, Ord, Hash)]
 pub struct Item<T> {
     /// The index of the item: this is unique for the entire lifetime of the
-    /// buffer from which this item originated.
+    /// queue from which this item originated.
     pub index: u64,
     /// The tag of the item which was originally assigned when the item was
-    /// inserted into the buffer.
+    /// inserted into the queue.
     pub tag: usize,
     /// The item itself (or a reference to one, i.e. `&T`, or `&mut T`).
     pub value: T,
@@ -134,7 +134,7 @@ macro_rules! get_before_impl {
                 value: get!(this.values, previous_index $(, $mutability)?)?,
                 tag: previous_index_tag,
                 index: (previous_index as u64).checked_add(this.offset)
-                    .expect("Buffer index overflow")
+                    .expect("Queue index overflow")
             })
         }
     };
@@ -153,7 +153,7 @@ macro_rules! get_after_impl {
             let (next_index_tag, next_index): (usize, usize) =
                 if let Some(index) = index.checked_sub(this.offset) {
                     // If the index given refers to an event after the start of
-                    // the event buffer at present...
+                    // the event queue at present...
                     let index = index.try_into().ok()?;
                     let current = this.info.get(index)?;
                     tags.iter().copied().map(|tag| {
@@ -190,8 +190,8 @@ macro_rules! get_after_impl {
                         })
                     }).min_by_key(|(_, i)| i.clone())?
                 } else {
-                    // If the index requested lies before the buffer, pick whichever
-                    // event in the set of tags happened first in the buffer
+                    // If the index requested lies before the queue, pick whichever
+                    // event in the set of tags happened first in the queue
                     tags.iter().copied()
                         .filter_map(|tag| Some((tag, *this.first_with_tag.get(tag)?)))
                         .min_by_key(|(_, i)| i.clone())?
@@ -202,34 +202,34 @@ macro_rules! get_after_impl {
                 value: get!(this.values, next_index $(, $mutability)?)?,
                 tag: next_index_tag,
                 index: (next_index as u64).checked_add(this.offset)
-                    .expect("Buffer index overflow")
+                    .expect("Queue index overflow")
             })
         }
     };
 }
 
 impl<T> Queue<T> {
-    /// Make a new buffer.
+    /// Make a new queue.
     ///
     /// # Examples
     ///
     /// ```
     /// use hopscotch::Queue;
     ///
-    /// let mut buffer: Queue<usize> = Queue::new();
+    /// let mut queue: Queue<usize> = Queue::new();
     /// ```
     pub fn new() -> Queue<T> {
         Self::with_capacity(0)
     }
 
-    /// Make a new buffer with a given initial allocated capacity.
+    /// Make a new queue with a given initial allocated capacity.
     ///
     /// # Examples
     ///
     /// ```
     /// use hopscotch::Queue;
     ///
-    /// let mut buffer: Queue<usize> = Queue::with_capacity(10);
+    /// let mut queue: Queue<usize> = Queue::with_capacity(10);
     /// ```
     pub fn with_capacity(capacity: usize) -> Queue<T> {
         Queue {
@@ -241,41 +241,41 @@ impl<T> Queue<T> {
         }
     }
 
-    /// The number of items currently in the buffer.
+    /// The number of items currently in the queue.
     ///
     /// # Examples
     ///
     /// ```
     /// use hopscotch::Queue;
     ///
-    /// let mut buffer: Queue<usize> = (0..4).zip(0..4).collect();
-    /// assert_eq!(buffer.len(), 4);
+    /// let mut queue: Queue<usize> = (0..4).zip(0..4).collect();
+    /// assert_eq!(queue.len(), 4);
     /// ```
     pub fn len(&self) -> usize {
         self.info.len()
     }
 
     /// The index which will be assigned to the next item to be added to the
-    /// buffer, whenever it is added.
+    /// queue, whenever it is added.
     ///
     /// # Examples
     ///
     /// ```
     /// use hopscotch::Queue;
     ///
-    /// let mut buffer: Queue<usize> = Queue::new();
-    /// assert_eq!(buffer.next_index(), 0);
-    /// let i = buffer.push(0, 100);
+    /// let mut queue: Queue<usize> = Queue::new();
+    /// assert_eq!(queue.next_index(), 0);
+    /// let i = queue.push(0, 100);
     /// assert_eq!(i, 0);
-    /// assert_eq!(buffer.next_index(), 1);
+    /// assert_eq!(queue.next_index(), 1);
     /// ```
     pub fn next_index(&self) -> u64 {
         self.offset
             .checked_add(self.len() as u64)
-            .expect("Buffer index overflow")
+            .expect("Queue index overflow")
     }
 
-    /// The first index which is still stored in the buffer (each `pop`
+    /// The first index which is still stored in the queue (each `pop`
     /// increments this value by 1).
     ///
     /// # Examples
@@ -283,16 +283,16 @@ impl<T> Queue<T> {
     /// ```
     /// use hopscotch::Queue;
     ///
-    /// let mut buffer: Queue<usize> = (0..10).zip(0..10).collect();
-    /// buffer.pop();
-    /// buffer.pop();
-    /// assert_eq!(buffer.first_index(), 2);
+    /// let mut queue: Queue<usize> = (0..10).zip(0..10).collect();
+    /// queue.pop();
+    /// queue.pop();
+    /// assert_eq!(queue.first_index(), 2);
     /// ```
     pub fn first_index(&self) -> u64 {
         self.offset
     }
 
-    /// Clear the contents of the buffer without de-allocating the queue's
+    /// Clear the contents of the queue without de-allocating the queue's
     /// memory (though memory will still be freed for the individual elements of
     /// the queue).
     ///
@@ -301,9 +301,9 @@ impl<T> Queue<T> {
     /// ```
     /// use hopscotch::Queue;
     ///
-    /// let mut buffer: Queue<usize> = (0..10).zip(0..10).collect();
-    /// buffer.clear();
-    /// assert_eq!(buffer.len(), 0);
+    /// let mut queue: Queue<usize> = (0..10).zip(0..10).collect();
+    /// queue.clear();
+    /// assert_eq!(queue.len(), 0);
     /// ```
     pub fn clear(&mut self) {
         self.first_with_tag.clear();
@@ -311,7 +311,7 @@ impl<T> Queue<T> {
         self.values.clear();
     }
 
-    /// Shrink the memory used by the queues in this buffer as much as possible.
+    /// Shrink the memory used by the queues in this queue as much as possible.
     /// This is less expensive than `shrink_all_to_fit`, but does not reclaim
     /// excess memory used by items within the queue. Note that such
     /// excessively-sized items in the queue can only be produced using
@@ -323,8 +323,8 @@ impl<T> Queue<T> {
         self.first_with_tag.shrink_to_fit();
     }
 
-    /// Shrink the memory used by this buffer as much as possible. This is a
-    /// potentially expensive operation, as it traverses the entire buffer.
+    /// Shrink the memory used by this queue as much as possible. This is a
+    /// potentially expensive operation, as it traverses the entire queue.
     pub fn shrink_all_to_fit(&mut self) {
         for info in self.info.iter_mut() {
             info.previous_with_tag.shrink_to_fit();
@@ -339,19 +339,19 @@ impl<T> Queue<T> {
     /// ```
     /// use hopscotch::Queue;
     ///
-    /// let mut buffer: Queue<usize> = (0..10).zip(0..10).collect();
-    /// assert_eq!(*buffer.get(0).unwrap().value, 0);
+    /// let mut queue: Queue<usize> = (0..10).zip(0..10).collect();
+    /// assert_eq!(*queue.get(0).unwrap().value, 0);
     /// ```
     ///
     /// As noted elsewhere, if we `pop` off this value, the index we
-    /// supplied no longer will refer to any item in the buffer, even though the
-    /// buffer still contains items:
+    /// supplied no longer will refer to any item in the queue, even though the
+    /// queue still contains items:
     ///
     /// ```
     /// # use hopscotch::Queue;
-    /// # let mut buffer: Queue<usize> = (0..10).zip(0..10).collect();
-    /// buffer.pop();
-    /// assert!(buffer.get(0).is_none());
+    /// # let mut queue: Queue<usize> = (0..10).zip(0..10).collect();
+    /// queue.pop();
+    /// assert!(queue.get(0).is_none());
     /// ```
     pub fn get(&self, index: u64) -> Option<Item<&T>> {
         get_impl!(self, index)
@@ -363,21 +363,21 @@ impl<T> Queue<T> {
     ///
     /// ```
     /// # use hopscotch::Queue;
-    /// let mut buffer: Queue<usize> = (0..10).zip(0..10).collect();
-    /// let mut n = buffer.get_mut(0).unwrap().value;
+    /// let mut queue: Queue<usize> = (0..10).zip(0..10).collect();
+    /// let mut n = queue.get_mut(0).unwrap().value;
     /// *n = 5000;
-    /// assert_eq!(*buffer.get(0).unwrap().value, 5000);
+    /// assert_eq!(*queue.get(0).unwrap().value, 5000);
     /// ```
     ///
     /// As noted elsewhere, if we `pop` off this value, the index we
-    /// supplied no longer will refer to any item in the buffer, even though the
-    /// buffer still contains items:
+    /// supplied no longer will refer to any item in the queue, even though the
+    /// queue still contains items:
     ///
     /// ```
     /// # use hopscotch::Queue;
-    /// # let mut buffer: Queue<usize> = (0..10).zip(0..10).collect();
-    /// buffer.pop();
-    /// assert!(buffer.get(0).is_none());
+    /// # let mut queue: Queue<usize> = (0..10).zip(0..10).collect();
+    /// queue.pop();
+    /// assert!(queue.get(0).is_none());
     /// ```
     pub fn get_mut(&mut self, index: u64) -> Option<Item<&mut T>> {
         get_impl!(self, index, mut)
@@ -388,13 +388,13 @@ impl<T> Queue<T> {
     ///
     /// # Examples
     ///
-    /// Suppose we construct a buffer that contains the phrase "Hello world!" in
+    /// Suppose we construct a queue that contains the phrase "Hello world!" in
     /// both English and French, interleaved, each word tagged with its
     /// language (0 = English; 1 = French):
     ///
     /// ```
     /// # use hopscotch::Queue;
-    /// let mut buffer: Queue<String> =
+    /// let mut queue: Queue<String> =
     ///     vec![(0, "Hello".to_string()),
     ///          (1, "Bonjour".to_string()),
     ///          (0, "world!".to_string()),
@@ -407,70 +407,70 @@ impl<T> Queue<T> {
     ///
     /// ```
     /// # use hopscotch::Queue;
-    /// # let mut buffer: Queue<String> =
+    /// # let mut queue: Queue<String> =
     /// #   vec![(0, "Hello".to_string()),
     /// #        (1, "Bonjour".to_string()),
     /// #        (0, "world!".to_string()),
     /// #        (1, "le monde!".to_string())].into_iter().collect();
-    /// assert_eq!(buffer.get_after(0, &[0]).unwrap().value, "Hello");
-    /// assert_eq!(buffer.get_after(0, &[1]).unwrap().value, "Bonjour");
-    /// assert_eq!(buffer.get_after(0, &[0, 1]).unwrap().value, "Hello");
+    /// assert_eq!(queue.get_after(0, &[0]).unwrap().value, "Hello");
+    /// assert_eq!(queue.get_after(0, &[1]).unwrap().value, "Bonjour");
+    /// assert_eq!(queue.get_after(0, &[0, 1]).unwrap().value, "Hello");
     /// ```
     ///
     /// Starting *inclusively after* index 1:
     ///
     /// ```
     /// # use hopscotch::Queue;
-    /// # let mut buffer: Queue<String> =
+    /// # let mut queue: Queue<String> =
     /// #   vec![(0, "Hello".to_string()),
     /// #        (1, "Bonjour".to_string()),
     /// #        (0, "world!".to_string()),
     /// #        (1, "le monde!".to_string())].into_iter().collect();
-    /// assert_eq!(buffer.get_after(1, &[0]).unwrap().value, "world!");
-    /// assert_eq!(buffer.get_after(1, &[1]).unwrap().value, "Bonjour");
-    /// assert_eq!(buffer.get_after(1, &[0, 1]).unwrap().value, "Bonjour");
+    /// assert_eq!(queue.get_after(1, &[0]).unwrap().value, "world!");
+    /// assert_eq!(queue.get_after(1, &[1]).unwrap().value, "Bonjour");
+    /// assert_eq!(queue.get_after(1, &[0, 1]).unwrap().value, "Bonjour");
     /// ```
     ///
     /// Starting *inclusively after* index 2:
     ///
     /// ```
     /// # use hopscotch::Queue;
-    /// # let mut buffer: Queue<String> =
+    /// # let mut queue: Queue<String> =
     /// #   vec![(0, "Hello".to_string()),
     /// #        (1, "Bonjour".to_string()),
     /// #        (0, "world!".to_string()),
     /// #        (1, "le monde!".to_string())].into_iter().collect();
-    /// assert_eq!(buffer.get_after(2, &[0]).unwrap().value, "world!");
-    /// assert_eq!(buffer.get_after(2, &[1]).unwrap().value, "le monde!");
-    /// assert_eq!(buffer.get_after(2, &[0, 1]).unwrap().value, "world!");
+    /// assert_eq!(queue.get_after(2, &[0]).unwrap().value, "world!");
+    /// assert_eq!(queue.get_after(2, &[1]).unwrap().value, "le monde!");
+    /// assert_eq!(queue.get_after(2, &[0, 1]).unwrap().value, "world!");
     /// ```
     ///
     /// Starting *inclusively after* index 3:
     ///
     /// ```
     /// # use hopscotch::Queue;
-    /// # let mut buffer: Queue<String> =
+    /// # let mut queue: Queue<String> =
     /// #   vec![(0, "Hello".to_string()),
     /// #        (1, "Bonjour".to_string()),
     /// #        (0, "world!".to_string()),
     /// #        (1, "le monde!".to_string())].into_iter().collect();
-    /// assert!(buffer.get_after(3, &[0]).is_none());
-    /// assert_eq!(buffer.get_after(3, &[1]).unwrap().value, "le monde!");
-    /// assert_eq!(buffer.get_after(3, &[0, 1]).unwrap().value, "le monde!");
+    /// assert!(queue.get_after(3, &[0]).is_none());
+    /// assert_eq!(queue.get_after(3, &[1]).unwrap().value, "le monde!");
+    /// assert_eq!(queue.get_after(3, &[0, 1]).unwrap().value, "le monde!");
     /// ```
     ///
     /// Starting *inclusively after* index 4:
     ///
     /// ```
     /// # use hopscotch::Queue;
-    /// # let mut buffer: Queue<String> =
+    /// # let mut queue: Queue<String> =
     /// #   vec![(0, "Hello".to_string()),
     /// #        (1, "Bonjour".to_string()),
     /// #        (0, "world!".to_string()),
     /// #        (1, "le monde!".to_string())].into_iter().collect();
-    /// assert!(buffer.get_after(4, &[0]).is_none());
-    /// assert!(buffer.get_after(4, &[1]).is_none());
-    /// assert!(buffer.get_after(4, &[0, 1]).is_none());
+    /// assert!(queue.get_after(4, &[0]).is_none());
+    /// assert!(queue.get_after(4, &[1]).is_none());
+    /// assert!(queue.get_after(4, &[0, 1]).is_none());
     /// ```
     pub fn get_after(&self, index: u64, tags: &[usize]) -> Option<Item<&T>> {
         get_after_impl!(self, index, tags)
@@ -484,121 +484,120 @@ impl<T> Queue<T> {
     ///
     /// # Examples
     ///
-    /// Suppose we construct a buffer that contains the phrase "Hello world!" in
+    /// Suppose we construct a queue that contains the phrase "Hello world!" in
     /// both English and French, interleaved, each word tagged with its
     /// language (0 = English; 1 = French):
     ///
     /// ```
     /// use hopscotch::Queue;
     ///
-    /// let mut buffer: Queue<String> =
+    /// let mut queue: Queue<String> =
     ///     vec![(0, "Hello".to_string()),
     ///          (1, "Bonjour".to_string()),
     ///          (0, "world!".to_string()),
     ///          (1, "le monde!".to_string())].into_iter().collect();
     ///
     /// let beginning = 0; // same start index for both calls to `get_after_mut`
-    /// *buffer.get_after_mut(beginning, &[0]).unwrap().value = "Goodbye".to_string();
-    /// *buffer.get_after_mut(beginning, &[1]).unwrap().value = "Au revoir".to_string();
+    /// *queue.get_after_mut(beginning, &[0]).unwrap().value = "Goodbye".to_string();
+    /// *queue.get_after_mut(beginning, &[1]).unwrap().value = "Au revoir".to_string();
     ///
-    /// assert_eq!(buffer.get(0).unwrap().value, "Goodbye");
-    /// assert_eq!(buffer.get(1).unwrap().value, "Au revoir");
+    /// assert_eq!(queue.get(0).unwrap().value, "Goodbye");
+    /// assert_eq!(queue.get(1).unwrap().value, "Au revoir");
     /// ```
     pub fn get_after_mut(&mut self, index: u64, tags: &[usize]) -> Option<Item<&mut T>> {
         get_after_impl!(self, index, tags, mut)
     }
-
 
     /// Get a reference to the latest item before or including `index` whose tag
     /// is one of those given.
     ///
     /// # Examples
     ///
-    /// Suppose we construct a buffer that contains the phrase "Hello world!" in
+    /// Suppose we construct a queue that contains the phrase "Hello world!" in
     /// both English and French, interleaved, each word tagged with its
     /// language (0 = English; 1 = French):
     ///
     /// ```
     /// use hopscotch::Queue;
     ///
-    /// let mut buffer: Queue<String> =
+    /// let mut queue: Queue<String> =
     ///     vec![(0, "Hello".to_string()),
     ///          (1, "Bonjour".to_string()),
     ///          (0, "world!".to_string()),
     ///          (1, "le monde!".to_string())].into_iter().collect();
     /// ```
     ///
-    /// Starting from index 4 (which is after the end of the buffer), the last
+    /// Starting from index 4 (which is after the end of the queue), the last
     /// word tagged as English is "world!"; the last tagged as French is "le
     /// monde!"; the last tagged as either is "le monde!":
     ///
     /// ```
     /// # use hopscotch::Queue;
-    /// # let mut buffer: Queue<String> =
+    /// # let mut queue: Queue<String> =
     /// #   vec![(0, "Hello".to_string()),
     /// #        (1, "Bonjour".to_string()),
     /// #        (0, "world!".to_string()),
     /// #        (1, "le monde!".to_string())].into_iter().collect();
-    /// assert_eq!(buffer.get_before(4, &[0]).unwrap().value, "world!");
-    /// assert_eq!(buffer.get_before(4, &[1]).unwrap().value, "le monde!");
-    /// assert_eq!(buffer.get_before(4, &[0, 1]).unwrap().value, "le monde!");
+    /// assert_eq!(queue.get_before(4, &[0]).unwrap().value, "world!");
+    /// assert_eq!(queue.get_before(4, &[1]).unwrap().value, "le monde!");
+    /// assert_eq!(queue.get_before(4, &[0, 1]).unwrap().value, "le monde!");
     /// ```
     ///
-    /// Starting *inclusively before* index 3 (the end of the buffer), we get
-    /// the same results as any query after the end of the buffer:
+    /// Starting *inclusively before* index 3 (the end of the queue), we get
+    /// the same results as any query after the end of the queue:
     ///
     /// ```
     /// # use hopscotch::Queue;
-    /// # let mut buffer: Queue<String> =
+    /// # let mut queue: Queue<String> =
     /// #   vec![(0, "Hello".to_string()),
     /// #        (1, "Bonjour".to_string()),
     /// #        (0, "world!".to_string()),
     /// #        (1, "le monde!".to_string())].into_iter().collect();
-    /// assert_eq!(buffer.get_before(3, &[0]).unwrap().value, "world!");
-    /// assert_eq!(buffer.get_before(3, &[1]).unwrap().value, "le monde!");
-    /// assert_eq!(buffer.get_before(3, &[0, 1]).unwrap().value, "le monde!");
+    /// assert_eq!(queue.get_before(3, &[0]).unwrap().value, "world!");
+    /// assert_eq!(queue.get_before(3, &[1]).unwrap().value, "le monde!");
+    /// assert_eq!(queue.get_before(3, &[0, 1]).unwrap().value, "le monde!");
     /// ```
     ///
     /// Starting *inclusively before* index 2:
     ///
     /// ```
     /// # use hopscotch::Queue;
-    /// # let mut buffer: Queue<String> =
+    /// # let mut queue: Queue<String> =
     /// #   vec![(0, "Hello".to_string()),
     /// #        (1, "Bonjour".to_string()),
     /// #        (0, "world!".to_string()),
     /// #        (1, "le monde!".to_string())].into_iter().collect();
-    /// assert_eq!(buffer.get_before(2, &[0]).unwrap().value, "world!");
-    /// assert_eq!(buffer.get_before(2, &[1]).unwrap().value, "Bonjour");
-    /// assert_eq!(buffer.get_before(2, &[0, 1]).unwrap().value, "world!");
+    /// assert_eq!(queue.get_before(2, &[0]).unwrap().value, "world!");
+    /// assert_eq!(queue.get_before(2, &[1]).unwrap().value, "Bonjour");
+    /// assert_eq!(queue.get_before(2, &[0, 1]).unwrap().value, "world!");
     /// ```
     ///
     /// Starting *inclusively before* index 1:
     ///
     /// ```
     /// # use hopscotch::Queue;
-    /// # let mut buffer: Queue<String> =
+    /// # let mut queue: Queue<String> =
     /// #   vec![(0, "Hello".to_string()),
     /// #        (1, "Bonjour".to_string()),
     /// #        (0, "world!".to_string()),
     /// #        (1, "le monde!".to_string())].into_iter().collect();
-    /// assert_eq!(buffer.get_before(1, &[0]).unwrap().value, "Hello");
-    /// assert_eq!(buffer.get_before(1, &[1]).unwrap().value, "Bonjour");
-    /// assert_eq!(buffer.get_before(1, &[0, 1]).unwrap().value, "Bonjour");
+    /// assert_eq!(queue.get_before(1, &[0]).unwrap().value, "Hello");
+    /// assert_eq!(queue.get_before(1, &[1]).unwrap().value, "Bonjour");
+    /// assert_eq!(queue.get_before(1, &[0, 1]).unwrap().value, "Bonjour");
     /// ```
     ///
     /// Starting *inclusively before* index 0:
     ///
     /// ```
     /// # use hopscotch::Queue;
-    /// # let mut buffer: Queue<String> =
+    /// # let mut queue: Queue<String> =
     /// #   vec![(0, "Hello".to_string()),
     /// #        (1, "Bonjour".to_string()),
     /// #        (0, "world!".to_string()),
     /// #        (1, "le monde!".to_string())].into_iter().collect();
-    /// assert_eq!(buffer.get_before(0, &[0]).unwrap().value, "Hello");
-    /// assert!(buffer.get_before(0, &[1]).is_none());
-    /// assert_eq!(buffer.get_before(0, &[0, 1]).unwrap().value, "Hello");
+    /// assert_eq!(queue.get_before(0, &[0]).unwrap().value, "Hello");
+    /// assert!(queue.get_before(0, &[1]).is_none());
+    /// assert_eq!(queue.get_before(0, &[0, 1]).unwrap().value, "Hello");
     /// ```
     pub fn get_before(&self, index: u64, tags: &[usize]) -> Option<Item<&T>> {
         get_before_impl!(self, index, tags)
@@ -612,40 +611,40 @@ impl<T> Queue<T> {
     ///
     /// # Examples
     ///
-    /// Suppose we construct a buffer that contains the phrase "Hello world!" in
+    /// Suppose we construct a queue that contains the phrase "Hello world!" in
     /// both English and French, interleaved, each word tagged with its
     /// language (0 = English; 1 = French):
     ///
     /// ```
     /// use hopscotch::Queue;
     ///
-    /// let mut buffer: Queue<String> =
+    /// let mut queue: Queue<String> =
     ///     vec![(0, "Hello".to_string()),
     ///          (1, "Bonjour".to_string()),
     ///          (0, "world!".to_string()),
     ///          (1, "le monde!".to_string())].into_iter().collect();
     ///
     /// let end = 5; // same end index for both calls to `get_after_mut`
-    /// *buffer.get_before_mut(end, &[0]).unwrap().value = "my friends!".to_string();
-    /// *buffer.get_before_mut(end, &[1]).unwrap().value = "mes amis!".to_string();
+    /// *queue.get_before_mut(end, &[0]).unwrap().value = "my friends!".to_string();
+    /// *queue.get_before_mut(end, &[1]).unwrap().value = "mes amis!".to_string();
     ///
-    /// assert_eq!(buffer.get(2).unwrap().value, "my friends!");
-    /// assert_eq!(buffer.get(3).unwrap().value, "mes amis!");
+    /// assert_eq!(queue.get(2).unwrap().value, "my friends!");
+    /// assert_eq!(queue.get(3).unwrap().value, "mes amis!");
     /// ```
     pub fn get_before_mut(&mut self, index: u64, tags: &[usize]) -> Option<Item<&mut T>> {
         get_before_impl!(self, index, tags, mut)
     }
 
-    /// Pop an item off the back of the buffer and return it.
+    /// Pop an item off the back of the queue and return it.
     ///
     /// # Examples
     ///
     /// ```
     /// use hopscotch::Queue;
     ///
-    /// let mut buffer: Queue<String> = Queue::new();
-    /// buffer.push(42, "Hello!".to_string());
-    /// let item = buffer.pop().unwrap();
+    /// let mut queue: Queue<String> = Queue::new();
+    /// queue.push(42, "Hello!".to_string());
+    /// let item = queue.pop().unwrap();
     ///
     /// assert_eq!(item.index, 0);
     /// assert_eq!(item.tag, 42);
@@ -655,7 +654,7 @@ impl<T> Queue<T> {
         Some(self.pop_and_reclaim()?.0)
     }
 
-    /// Pop an item off the buffer and reclaim the memory it used, so we can
+    /// Pop an item off the queue and reclaim the memory it used, so we can
     /// avoid needless allocations. This is an internal-only function.
     fn pop_and_reclaim(&mut self) -> Option<(Item<T>, Sparse<usize>)> {
         // The index of the thing that's about to get popped is equal to
@@ -681,20 +680,20 @@ impl<T> Queue<T> {
             //   should always hold the index of the thing with tag k,
             //   and we know that the thing at index 0 is not with tag k
             if *dist < queue_len {
-                *dist = dist.checked_sub(1).expect("Zero in wrong place in first_with_tag");
+                *dist = dist
+                    .checked_sub(1)
+                    .expect("Zero in wrong place in first_with_tag");
                 true // keep this thing
             } else {
                 false // drop this thing
             }
         });
         // Remove all latest_with_tag references that extend past the queue
-        self.latest_with_tag.retain(|_, dist| {
-            *dist < queue_len
-        });
+        self.latest_with_tag.retain(|_, dist| *dist < queue_len);
         // Clear the vec but retain its memory
         popped_info.previous_with_tag.clear();
         // Bump the offset because we just shifted the queue
-        self.offset = self.offset.checked_add(1).expect("Buffer index overflow");
+        self.offset = self.offset.checked_add(1).expect("Queue index overflow");
         // Return the pieces
         Some((
             Item {
@@ -706,22 +705,22 @@ impl<T> Queue<T> {
         ))
     }
 
-    /// Push a new item into the buffer, returning its assigned index.
+    /// Push a new item into the queue, returning its assigned index.
     ///
     /// # Examples
     ///
     /// ```
     /// use hopscotch::Queue;
     ///
-    /// let mut buffer: Queue<String> = Queue::new();
-    /// buffer.push(0, "Hello!".to_string());
+    /// let mut queue: Queue<String> = Queue::new();
+    /// queue.push(0, "Hello!".to_string());
     /// ```
     pub fn push(&mut self, tag: usize, value: T) -> u64 {
         self.push_and_maybe_pop(tag, value, false).0
     }
 
-    /// Push a new item into the buffer, evicting the least recent item from the
-    /// buffer at the same time, and returning that old item, if one existed.
+    /// Push a new item into the queue, evicting the least recent item from the
+    /// queue at the same time, and returning that old item, if one existed.
     /// This is equivalent to calling `pop` and then `push`, but is more
     /// efficient because it saves allocations.
     ///
@@ -731,16 +730,16 @@ impl<T> Queue<T> {
     /// at the cost of potentially greater memory consumption. Space temporarily
     /// leaked by setting `shrink` to `false` can be reclaimed using
     /// `shrink_all_to_fit` -- but note that this is an expensive operation that
-    /// takes time proportionate to the memory used by the buffer.
+    /// takes time proportionate to the memory used by the queue.
     ///
     /// # Examples
     ///
     /// ```
     /// use hopscotch::Queue;
     ///
-    /// let mut buffer: Queue<String> = Queue::new();
-    /// buffer.push(42, "Hello!".to_string());
-    /// let (new_index, popped) = buffer.push_and_pop(1, "Goodbye!".to_string(), false);
+    /// let mut queue: Queue<String> = Queue::new();
+    /// queue.push(42, "Hello!".to_string());
+    /// let (new_index, popped) = queue.push_and_pop(1, "Goodbye!".to_string(), false);
     /// let item = popped.unwrap();
     ///
     /// assert_eq!(new_index, 1);
@@ -751,13 +750,17 @@ impl<T> Queue<T> {
     pub fn push_and_pop(&mut self, tag: usize, value: T, shrink: bool) -> (u64, Option<Item<T>>) {
         let result = self.push_and_maybe_pop(tag, value, true);
         if shrink {
-            self.info.front_mut().unwrap().previous_with_tag.shrink_to_fit();
+            self.info
+                .front_mut()
+                .unwrap()
+                .previous_with_tag
+                .shrink_to_fit();
         }
         result
     }
 
-    /// Push a new item into the buffer, potentially evicting an old item if the
-    /// buffer is full. Returns the index of the newly pushed item paired with
+    /// Push a new item into the queue, potentially evicting an old item if the
+    /// queue is full. Returns the index of the newly pushed item paired with
     /// the old item and its own index, if an old item was evicted.
     fn push_and_maybe_pop(
         &mut self,
@@ -843,11 +846,14 @@ impl<T> Queue<T> {
             *dist = dist.saturating_add(1); // everything: 1 more away
         }
         self.latest_with_tag.entry(tag).insert(0); // this tag: right here
-        // Calculate the index of the just-inserted thing
-        (self.offset
-         .checked_add(self.len() as u64)
-         .expect("Buffer index overflow") - 1,
-         popped_item)
+                                                   // Calculate the index of the just-inserted thing
+        (
+            self.offset
+                .checked_add(self.len() as u64)
+                .expect("Queue index overflow")
+                - 1,
+            popped_item,
+        )
     }
 
     /// Get an iterator of immutable items matching any of the given tags, whose
@@ -860,19 +866,19 @@ impl<T> Queue<T> {
     /// ```
     /// use hopscotch::Queue;
     ///
-    /// let mut buffer: Queue<String> =
+    /// let mut queue: Queue<String> =
     ///     vec![(0, "Hello".to_string()),
     ///          (1, "Bonjour".to_string()),
     ///          (0, "world!".to_string()),
     ///          (1, "le monde!".to_string())].into_iter().collect();
     ///
     /// let english: Vec<&str> =
-    ///     buffer.iter_between(0, u64::max_value(), &[0])
+    ///     queue.iter_between(0, u64::max_value(), &[0])
     ///     .map(|i| i.value.as_ref()).collect();
     /// assert_eq!(english, &["Hello", "world!"]);
     ///
     /// let french_backwards: Vec<&str> =
-    ///     buffer.iter_between(0, u64::max_value(), &[1]).rev() // <-- notice the reversal
+    ///     queue.iter_between(0, u64::max_value(), &[1]).rev() // <-- notice the reversal
     ///     .map(|i| i.value.as_ref()).collect();
     /// assert_eq!(french_backwards, &["le monde!", "Bonjour"]);
     /// ```
@@ -880,7 +886,7 @@ impl<T> Queue<T> {
         &'a self,
         earliest: u64,
         latest: u64,
-        tags: &'b [usize]
+        tags: &'b [usize],
     ) -> Iter<'a, 'b, T> {
         Iter {
             inner: self,
@@ -900,18 +906,18 @@ impl<T> Queue<T> {
     /// ```
     /// use hopscotch::Queue;
     ///
-    /// let mut buffer: Queue<String> =
+    /// let mut queue: Queue<String> =
     ///     vec![(0, "Hello".to_string()),
     ///          (1, "Bonjour".to_string()),
     ///          (0, "world!".to_string()),
     ///          (1, "le monde!".to_string())].into_iter().collect();
     ///
-    /// for item in buffer.iter_between_mut(0, u64::max_value(), &[0]) {
+    /// for item in queue.iter_between_mut(0, u64::max_value(), &[0]) {
     ///    *item.value = item.value.to_uppercase();
     /// }
     ///
     /// let words: Vec<&str> =
-    ///     buffer.iter_between(0, u64::max_value(), &[0, 1])
+    ///     queue.iter_between(0, u64::max_value(), &[0, 1])
     ///     .map(|i| i.value.as_ref()).collect();
     /// assert_eq!(words, &["HELLO", "Bonjour", "WORLD!", "le monde!"]);
     /// ```
@@ -919,7 +925,7 @@ impl<T> Queue<T> {
         &'a mut self,
         earliest: u64,
         latest: u64,
-        tags: &'b [usize]
+        tags: &'b [usize],
     ) -> IterMut<'a, 'b, T> {
         IterMut {
             inner: self,
@@ -931,17 +937,20 @@ impl<T> Queue<T> {
 }
 
 impl<T> FromIterator<(usize, T)> for Queue<T> {
-    fn from_iter<I>(iter: I) -> Self where I: IntoIterator<Item = (usize, T)> {
+    fn from_iter<I>(iter: I) -> Self
+    where
+        I: IntoIterator<Item = (usize, T)>,
+    {
         let iter = iter.into_iter();
-        let mut buffer = Queue::with_capacity(iter.size_hint().0);
+        let mut queue = Queue::with_capacity(iter.size_hint().0);
         for (tag, item) in iter {
-            buffer.push(tag, item);
+            queue.push(tag, item);
         }
-        buffer
+        queue
     }
 }
 
-/// An iterator over immutable references to items in a buffer.
+/// An iterator over immutable references to items in a queue.
 pub struct Iter<'a, 'b, T> {
     inner: &'a Queue<T>,
     tags: &'b [usize],
@@ -975,7 +984,7 @@ impl<'a, 'b, T> DoubleEndedIterator for Iter<'a, 'b, T> {
     }
 }
 
-/// An iterator over mutable references to items in a buffer.
+/// An iterator over mutable references to items in a queue.
 pub struct IterMut<'a, 'b, T: 'a> {
     inner: &'a mut Queue<T>,
     tags: &'b [usize],
