@@ -46,7 +46,7 @@ impl<T> Sparse<T> {
     /// # Examples
     ///
     /// ```
-    /// # use event_queue_demo::sparse::Sparse;
+    /// # use hopscotch::sparse::Sparse;
     /// let mut s: Sparse<usize> = Sparse::new();
     /// s.push(0);
     /// assert_eq!(s.into_dense(), vec![Some(0)]);
@@ -70,7 +70,7 @@ impl<T> Sparse<T> {
     /// # Examples
     ///
     /// ```
-    /// # use event_queue_demo::sparse::Sparse;
+    /// # use hopscotch::sparse::Sparse;
     /// let mut s: Sparse<usize> = Sparse::new();
     /// s.push(100);
     /// s.skip(1);
@@ -103,7 +103,7 @@ impl<T> Sparse<T> {
     /// # Examples
     ///
     /// ```
-    /// # use event_queue_demo::sparse::Sparse;
+    /// # use hopscotch::sparse::Sparse;
     /// let mut s: Sparse<usize> = Sparse::new();
     /// s.skip(1);
     /// s.push(100);
@@ -131,7 +131,7 @@ impl<T> Sparse<T> {
     /// # Examples
     ///
     /// ```
-    /// # use event_queue_demo::sparse::Sparse;
+    /// # use hopscotch::sparse::Sparse;
     /// let mut s: Sparse<usize> = Sparse::new();
     /// s.skip(12345);
     /// s.push(100);
@@ -151,7 +151,7 @@ impl<T> Sparse<T> {
     /// # Examples
     ///
     /// ```
-    /// # use event_queue_demo::sparse::Sparse;
+    /// # use hopscotch::sparse::Sparse;
     /// let mut s: Sparse<usize> = Sparse::new();
     /// s.skip(12345);
     /// s.push(100);
@@ -196,7 +196,7 @@ impl<T> Sparse<T> {
     /// # Examples
     ///
     /// ```
-    /// # use event_queue_demo::sparse::Sparse;
+    /// # use hopscotch::sparse::Sparse;
     /// let mut s: Sparse<usize> = Sparse::new();
     /// s.push(1);
     /// s.push(2);
@@ -222,7 +222,7 @@ impl<T> Sparse<T> {
     /// # Examples
     ///
     /// ```
-    /// # use event_queue_demo::sparse::Sparse;
+    /// # use hopscotch::sparse::Sparse;
     /// let mut s: Sparse<usize> = Sparse::new();
     /// s.skip(12345);
     /// s.push(0);
@@ -246,7 +246,7 @@ impl<T> Sparse<T> {
     /// # Examples
     ///
     /// ```
-    /// # use event_queue_demo::sparse::Sparse;
+    /// # use hopscotch::sparse::Sparse;
     /// let mut s: Sparse<usize> = Sparse::new();
     /// s.skip(9999);
     /// s.push(0);
@@ -302,7 +302,7 @@ impl<T> Sparse<T> {
     /// # Examples
     ///
     /// ```
-    /// # use event_queue_demo::sparse::Sparse;
+    /// # use hopscotch::sparse::Sparse;
     /// let mut s: Sparse<usize> = (0..4).zip(0..4).collect();
     /// s.retain(|i, _| i % 2 == 0);
     /// assert_eq!(s.into_dense(), vec![Some(0), None, Some(2), None]);

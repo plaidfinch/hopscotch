@@ -1,4 +1,4 @@
-use event_queue_demo::sparse::*;
+use hopscotch::sparse::*;
 use quickcheck::{quickcheck, Arbitrary, Gen};
 use std::iter;
 

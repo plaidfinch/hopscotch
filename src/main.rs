@@ -1,9 +1,9 @@
-use event_queue_demo::TaggedBuffer;
+use hopscotch::Queue;
 use std::io;
 
 fn main() {
     let mut count = 0;
-    let mut buffer: TaggedBuffer<usize> = TaggedBuffer::with_capacity(5);
+    let mut buffer: Queue<usize> = Queue::with_capacity(5);
     loop {
         let mut input = String::new();
         match io::stdin().read_line(&mut input) {
@@ -17,7 +17,7 @@ fn main() {
                 }
                 ["push_and_pop", k] => {
                     let tag = k.trim().parse().unwrap();
-                    let i = buffer.push_and_pop(tag, count);
+                    let i = buffer.push_and_pop(tag, count, false);
                     println!("{}", buffer);
                     println!("Result: {:?}", i);
                     count += 1;

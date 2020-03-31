@@ -24,7 +24,7 @@ impl<'a, T> Entry<'a, T> {
     /// # Examples
     ///
     /// ```
-    /// # use event_queue_demo::sparse::Sparse;
+    /// # use hopscotch::sparse::Sparse;
     /// let mut s: Sparse<usize> = Sparse::new();
     /// s.entry(2).insert(100);
     /// assert_eq!(s.into_dense(), vec![None, None, Some(100)]);
@@ -45,7 +45,7 @@ impl<'a, T> Entry<'a, T> {
     /// # Examples
     ///
     /// ```
-    /// # use event_queue_demo::sparse::Sparse;
+    /// # use hopscotch::sparse::Sparse;
     /// let mut s: Sparse<usize> = Sparse::new();
     /// *s.entry(2).or_insert(500) += 1;
     /// *s.entry(2).or_insert(500) += 1;
@@ -65,7 +65,7 @@ impl<'a, T> Entry<'a, T> {
     /// # Examples
     ///
     /// ```
-    /// # use event_queue_demo::sparse::Sparse;
+    /// # use hopscotch::sparse::Sparse;
     /// let mut s: Sparse<usize> = Sparse::new();
     /// let mut counter: usize = 0;
     /// *s.entry(2).or_insert_with(|| { counter += 1; 500 }) += 1; // closure used
@@ -85,7 +85,7 @@ impl<'a, T> Entry<'a, T> {
     /// # Examples
     ///
     /// ```
-    /// # use event_queue_demo::sparse::Sparse;
+    /// # use hopscotch::sparse::Sparse;
     /// let mut s: Sparse<usize> = Sparse::new();
     /// assert_eq!(s.entry(2).index(), 2);
     /// ```
@@ -102,7 +102,7 @@ impl<'a, T> Entry<'a, T> {
     /// # Examples
     ///
     /// ```
-    /// # use event_queue_demo::sparse::Sparse;
+    /// # use hopscotch::sparse::Sparse;
     /// let mut s: Sparse<usize> = Sparse::new();
     /// s.entry(2).insert(100);
     /// s.entry(2).and_modify(|n| *n += 1).or_insert(200);
@@ -126,7 +126,7 @@ impl<'a, T> Entry<'a, T> {
     /// # Examples
     ///
     /// ```
-    /// # use event_queue_demo::sparse::Sparse;
+    /// # use hopscotch::sparse::Sparse;
     /// let mut s: Sparse<usize> = Sparse::new();
     /// *s.entry(123).or_default() += 1;
     /// *s.entry(123).or_default() += 1;

@@ -1,5 +1,5 @@
 [package]
-name = "event-queue-demo"
+name = "hopscotch"
 version = "0.1.0"
 authors = ["Kenny Foner <kwf@galois.com>"]
 edition = "2018"
