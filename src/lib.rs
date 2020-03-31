@@ -6,7 +6,7 @@ use std::iter::FromIterator;
 pub mod sparse;
 use sparse::Sparse;
 
-// TODO: implement get_before(_mut) and forward/reverse iterators
+// TODO: forward/reverse iterators
 // TODO: full simulation testing
 // TODO: benchmark
 // TODO: parameterize over the type of sparse collection?
@@ -35,6 +35,7 @@ use sparse::Sparse;
 pub struct TaggedBuffer<T> {
     offset: u64,
     first_with_tag: Sparse<usize>,
+    latest_with_tag: Sparse<usize>,
     queue: VecDeque<InternalItem<T>>,
 }
 
@@ -111,21 +112,63 @@ macro_rules! get_impl {
     }
 }
 
-/// This macro implements all four "get" variations: both immutable and mutable,
-/// and exclusively-after and here-or-after. It must be a macro because while
-/// all the code is operationally the same regardless of mutability, Rust does
-/// not (yet) have mutability polymorphism.
+/// This macro implements both "get_before" variations: both immutable and
+/// mutable. It must be a macro because while all the code is operationally the
+/// same regardless of mutability, Rust does not (yet) have mutability
+/// polymorphism.
+macro_rules! get_before_impl {
+    ($self:expr, $index:expr, $tags:expr $(, $mutability:tt)?) => {
+        {
+            let index = $index;
+            let tags = $tags;
+            let this = $self;
+            let index = index.checked_sub(this.offset)?.try_into().ok()?;
+            let (previous_index_tag, previous_index) =
+                if let Some(current) = this.queue.get(index) {
+                    let (previous_tag, previous_distance) =
+                    tags.iter().copied()
+                        .filter_map(|tag| Some((tag, *current.previous_with_tag.get(tag)?)))
+                        .min_by_key(|(_, dist)| dist.clone())?;
+                    let previous_index = index.checked_sub(previous_distance)?;
+                    (previous_tag, previous_index)
+                } else {
+                    let (previous_tag, previous_distance) =
+                    tags.iter().copied()
+                        .filter_map(|tag| Some((tag, *this.latest_with_tag.get(tag)?)))
+                        .min_by_key(|(_, dist)| dist.clone())?;
+                    let previous_index =
+                        this.queue.len()
+                        .checked_sub(previous_distance.saturating_add(1))?;
+                    (previous_tag, previous_index)
+                };
+            let item = get!(this.queue, previous_index $(, $mutability)?)?;
+            Some(Item {
+                value: & $($mutability)? item.value,
+                tag: previous_index_tag,
+                index: (previous_index as u64).checked_add(this.offset)
+                    .expect("Buffer index overflow")
+            })
+        }
+    };
+}
+
+/// This macro implements both "get_after" variations: both immutable and
+/// mutable. It must be a macro because while all the code is operationally the
+/// same regardless of mutability, Rust does not (yet) have mutability
+/// polymorphism.
 macro_rules! get_after_impl {
     ($self:expr, $index:expr, $tags:expr $(, $mutability:tt)?) => {
         {
             let index = $index;
+            let tags = $tags;
+            let this = $self;
             let (next_index_tag, next_index): (usize, usize) =
-                if let Some(index) = index.checked_sub($self.offset) {
+                if let Some(index) = index.checked_sub(this.offset) {
                     // If the index given refers to an event after the start of
                     // the event buffer at present...
                     let index = index.try_into().ok()?;
-                    let current = $self.queue.get(index)?;
-                    $tags.iter().copied().map(|tag| {
+                    let current = this.queue.get(index)?;
+                    tags.iter().copied().map(|tag| {
                         (tag, if current.has_tag(tag) {
                             index
                         } else {
@@ -141,7 +184,7 @@ macro_rules! get_after_impl {
                                 // where k != k' can't lie before current_k' or
                                 // else previous_k should have been next_k, a
                                 // contradiction.
-                                $self.queue.get(previous_index)
+                                this.queue.get(previous_index)
                                     .map_or(usize::max_value(), |item| {
                                         index.saturating_add(
                                             item.next_with_tag.checked_sub(1)
@@ -153,7 +196,7 @@ macro_rules! get_after_impl {
                                 // there were no preceding events of the
                                 // particular tag, but there might be ones in
                                 // the future of it.
-                                *$self.first_with_tag.get(tag)
+                                *this.first_with_tag.get(tag)
                                     .unwrap_or(&usize::max_value())
                             }
                         })
@@ -161,17 +204,17 @@ macro_rules! get_after_impl {
                 } else {
                     // If the index requested lies before the buffer, pick whichever
                     // event in the set of tags happened first in the buffer
-                    $tags.iter().copied()
-                        .filter_map(|tag| Some((tag, *$self.first_with_tag.get(tag)?)))
+                    tags.iter().copied()
+                        .filter_map(|tag| Some((tag, *this.first_with_tag.get(tag)?)))
                         .min_by_key(|(_, i)| i.clone())?
                 };
             // Get the item at the minimum index and return its exterior-facing
             // index and a reference to the item itself.
-            let item = get!($self.queue, next_index $(, $mutability)?)?;
+            let item = get!(this.queue, next_index $(, $mutability)?)?;
             Some(Item {
                 value: & $($mutability)? item.value,
                 tag: next_index_tag,
-                index: (next_index as u64).checked_add($self.offset)
+                index: (next_index as u64).checked_add(this.offset)
                     .expect("Buffer index overflow")
             })
         }
@@ -203,6 +246,7 @@ impl<T> TaggedBuffer<T> {
         TaggedBuffer {
             offset: 0,
             first_with_tag: Sparse::new(),
+            latest_with_tag: Sparse::new(),
             queue: VecDeque::with_capacity(capacity),
         }
     }
@@ -356,7 +400,7 @@ impl<T> TaggedBuffer<T> {
     /// assert_eq!(buffer.get_after(0, &[0, 1]).unwrap().value, "Hello");
     /// ```
     ///
-    /// Starting *inclusively from* index 1:
+    /// Starting *inclusively after* index 1:
     ///
     /// ```
     /// # use event_queue_demo::TaggedBuffer;
@@ -370,7 +414,7 @@ impl<T> TaggedBuffer<T> {
     /// assert_eq!(buffer.get_after(1, &[0, 1]).unwrap().value, "Bonjour");
     /// ```
     ///
-    /// Starting *inclusively from* index 2:
+    /// Starting *inclusively after* index 2:
     ///
     /// ```
     /// # use event_queue_demo::TaggedBuffer;
@@ -384,7 +428,7 @@ impl<T> TaggedBuffer<T> {
     /// assert_eq!(buffer.get_after(2, &[0, 1]).unwrap().value, "world!");
     /// ```
     ///
-    /// Starting *inclusively from* index 3:
+    /// Starting *inclusively after* index 3:
     ///
     /// ```
     /// # use event_queue_demo::TaggedBuffer;
@@ -398,7 +442,7 @@ impl<T> TaggedBuffer<T> {
     /// assert_eq!(buffer.get_after(3, &[0, 1]).unwrap().value, "le monde!");
     /// ```
     ///
-    /// Starting *inclusively from* index 4:
+    /// Starting *inclusively after* index 4:
     ///
     /// ```
     /// # use event_queue_demo::TaggedBuffer;
@@ -446,6 +490,132 @@ impl<T> TaggedBuffer<T> {
         get_after_impl!(self, index, tags, mut)
     }
 
+
+    /// Get a reference to the latest item before or including `index` whose tag
+    /// is one of those given.
+    ///
+    /// # Examples
+    ///
+    /// Suppose we construct a buffer that contains the phrase "Hello world!" in
+    /// both English and French, interleaved, each word tagged with its
+    /// language (0 = English; 1 = French):
+    ///
+    /// ```
+    /// # use event_queue_demo::TaggedBuffer;
+    /// let mut buffer: TaggedBuffer<String> =
+    ///     vec![(0, "Hello".to_string()),
+    ///          (1, "Bonjour".to_string()),
+    ///          (0, "world!".to_string()),
+    ///          (1, "le monde!".to_string())].into_iter().collect();
+    /// ```
+    ///
+    /// Starting from index 4 (which is after the end of the buffer), the last
+    /// word tagged as English is "world!"; the last tagged as French is "le
+    /// monde!"; the last tagged as either is "le monde!":
+    ///
+    /// ```
+    /// # use event_queue_demo::TaggedBuffer;
+    /// # let mut buffer: TaggedBuffer<String> =
+    /// #   vec![(0, "Hello".to_string()),
+    /// #        (1, "Bonjour".to_string()),
+    /// #        (0, "world!".to_string()),
+    /// #        (1, "le monde!".to_string())].into_iter().collect();
+    /// assert_eq!(buffer.get_before(4, &[0]).unwrap().value, "world!");
+    /// assert_eq!(buffer.get_before(4, &[1]).unwrap().value, "le monde!");
+    /// assert_eq!(buffer.get_before(4, &[0, 1]).unwrap().value, "le monde!");
+    /// ```
+    ///
+    /// Starting *inclusively before* index 3 (the end of the buffer), we get
+    /// the same results as any query after the end of the buffer:
+    ///
+    /// ```
+    /// # use event_queue_demo::TaggedBuffer;
+    /// # let mut buffer: TaggedBuffer<String> =
+    /// #   vec![(0, "Hello".to_string()),
+    /// #        (1, "Bonjour".to_string()),
+    /// #        (0, "world!".to_string()),
+    /// #        (1, "le monde!".to_string())].into_iter().collect();
+    /// assert_eq!(buffer.get_before(3, &[0]).unwrap().value, "world!");
+    /// assert_eq!(buffer.get_before(3, &[1]).unwrap().value, "le monde!");
+    /// assert_eq!(buffer.get_before(3, &[0, 1]).unwrap().value, "le monde!");
+    /// ```
+    ///
+    /// Starting *inclusively before* index 2:
+    ///
+    /// ```
+    /// # use event_queue_demo::TaggedBuffer;
+    /// # let mut buffer: TaggedBuffer<String> =
+    /// #   vec![(0, "Hello".to_string()),
+    /// #        (1, "Bonjour".to_string()),
+    /// #        (0, "world!".to_string()),
+    /// #        (1, "le monde!".to_string())].into_iter().collect();
+    /// assert_eq!(buffer.get_before(2, &[0]).unwrap().value, "world!");
+    /// assert_eq!(buffer.get_before(2, &[1]).unwrap().value, "Bonjour");
+    /// assert_eq!(buffer.get_before(2, &[0, 1]).unwrap().value, "world!");
+    /// ```
+    ///
+    /// Starting *inclusively before* index 1:
+    ///
+    /// ```
+    /// # use event_queue_demo::TaggedBuffer;
+    /// # let mut buffer: TaggedBuffer<String> =
+    /// #   vec![(0, "Hello".to_string()),
+    /// #        (1, "Bonjour".to_string()),
+    /// #        (0, "world!".to_string()),
+    /// #        (1, "le monde!".to_string())].into_iter().collect();
+    /// assert_eq!(buffer.get_before(1, &[0]).unwrap().value, "Hello");
+    /// assert_eq!(buffer.get_before(1, &[1]).unwrap().value, "Bonjour");
+    /// assert_eq!(buffer.get_before(1, &[0, 1]).unwrap().value, "Bonjour");
+    /// ```
+    ///
+    /// Starting *inclusively before* index 0:
+    ///
+    /// ```
+    /// # use event_queue_demo::TaggedBuffer;
+    /// # let mut buffer: TaggedBuffer<String> =
+    /// #   vec![(0, "Hello".to_string()),
+    /// #        (1, "Bonjour".to_string()),
+    /// #        (0, "world!".to_string()),
+    /// #        (1, "le monde!".to_string())].into_iter().collect();
+    /// assert_eq!(buffer.get_before(0, &[0]).unwrap().value, "Hello");
+    /// assert!(buffer.get_before(0, &[1]).is_none());
+    /// assert_eq!(buffer.get_before(0, &[0, 1]).unwrap().value, "Hello");
+    /// ```
+    pub fn get_before(&self, index: u64, tags: &[usize]) -> Option<Item<&T>> {
+        get_before_impl!(self, index, tags)
+    }
+
+    /// Get a mutable reference to the latest item before or including `index`
+    /// whose tag is one of those given.
+    ///
+    /// This uses the same semantics for lookup as `get_before`: see its
+    /// documentation for more examples.
+    ///
+    /// # Examples
+    ///
+    /// Suppose we construct a buffer that contains the phrase "Hello world!" in
+    /// both English and French, interleaved, each word tagged with its
+    /// language (0 = English; 1 = French):
+    ///
+    /// ```
+    /// # use event_queue_demo::TaggedBuffer;
+    /// let mut buffer: TaggedBuffer<String> =
+    ///     vec![(0, "Hello".to_string()),
+    ///          (1, "Bonjour".to_string()),
+    ///          (0, "world!".to_string()),
+    ///          (1, "le monde!".to_string())].into_iter().collect();
+    ///
+    /// let end = 5; // same end index for both calls to `get_after_mut`
+    /// *buffer.get_before_mut(end, &[0]).unwrap().value = "my friends!".to_string();
+    /// *buffer.get_before_mut(end, &[1]).unwrap().value = "mes amis!".to_string();
+    ///
+    /// assert_eq!(buffer.get(2).unwrap().value, "my friends!");
+    /// assert_eq!(buffer.get(3).unwrap().value, "mes amis!");
+    /// ```
+    pub fn get_before_mut(&mut self, index: u64, tags: &[usize]) -> Option<Item<&mut T>> {
+        get_before_impl!(self, index, tags, mut)
+    }
+
     /// Pop an item off the back of the buffer and return it.
     ///
     /// # Examples
@@ -478,10 +648,14 @@ impl<T> TaggedBuffer<T> {
         let mut popped_tag = None;
         let first_with_tag_len = self.first_with_tag.len();
         let queue_len = self.queue.len();
-        self.first_with_tag.retain(|k, dist| {
-            if popped.has_tag(k) {
+        // Remove all first_with_tag references that extend past the queue, and
+        // subtract one from those that don't -- with the exception of the tag
+        // which is being removed, which should be set to the index of the next
+        // of that tag
+        self.first_with_tag.retain(|t, dist| {
+            if popped.has_tag(t) {
                 *dist = popped.next_with_tag;
-                popped_tag = Some(k);
+                popped_tag = Some(t);
             }
             // It's safe to .unwrap() below because:
             // - if popped.has_tag(k), then *dist = popped.next_with_tag
@@ -496,6 +670,10 @@ impl<T> TaggedBuffer<T> {
             } else {
                 false // drop this thing
             }
+        });
+        // Remove all latest_with_tag references that extend past the queue
+        self.latest_with_tag.retain(|_, dist| {
+            *dist < queue_len
         });
         // Shrink the first_with_tag vector if necessary
         if first_with_tag_len != self.first_with_tag.len() {
@@ -633,6 +811,11 @@ impl<T> TaggedBuffer<T> {
         if self.first_with_tag.get(tag).is_none() {
             self.first_with_tag.entry(tag).insert(self.queue.len() - 1);
         }
+        // Make sure latest_with_tag tracks this event
+        for dist in self.latest_with_tag.values_mut() {
+            *dist = dist.saturating_add(1); // everything: 1 more away
+        }
+        self.latest_with_tag.entry(tag).insert(0); // this tag: right here
         // Calculate the index of the just-inserted thing
         (self.offset
          .checked_add(self.queue.len() as u64)
