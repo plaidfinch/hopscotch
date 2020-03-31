@@ -36,7 +36,8 @@ pub struct TaggedBuffer<T> {
     offset: u64,
     first_with_tag: Sparse<usize>,
     latest_with_tag: Sparse<usize>,
-    queue: VecDeque<InternalItem<T>>,
+    info: VecDeque<Info>,
+    values: VecDeque<T>,
 }
 
 /// An item from the buffer, either one that is currently in it, or one that has
@@ -56,19 +57,15 @@ pub struct Item<T> {
 }
 
 #[derive(Debug, Clone)]
-struct InternalItem<T> {
-    value: T,
+struct Info {
+    tag: usize,
     next_with_tag: usize,
     previous_with_tag: Sparse<usize>,
 }
 
-impl<T> InternalItem<T> {
+impl Info {
     fn has_tag(&self, tag: usize) -> bool {
-        if let Some(0) = self.previous_with_tag.get(tag) {
-            true
-        } else {
-            false
-        }
+        self.tag == tag
     }
 }
 
@@ -88,25 +85,19 @@ macro_rules! get {
 macro_rules! get_impl {
     ($self:expr, $index:expr $(, $mutability:tt)?) => {
         {
+            let index = $index;
+            let this = $self;
             // Find the item, if one exists
-            let InternalItem {
-                previous_with_tag,
-                value, ..
-            } = get!($self.queue,
-                    $index.checked_sub($self.offset)?.try_into().ok()?
-                    $(, $mutability)?)?;
-            // Determine the tag of the item
-            let mut tag = None;
-            for (t, d) in previous_with_tag {
-                if *d == 0 {
-                    tag = Some(t);
-                    break;
-                }
-            }
-            Some(Item {
-                value,
-                index: $index,
-                tag: tag.expect("No 0 element in get_exact item"),
+            let internal_index =
+                index.checked_sub(this.offset)?.try_into().ok()?;
+            let Info{tag, ..} =
+                get!(this.info,
+                     internal_index
+                     $(, $mutability)?)?;
+            Some(Item{
+                value: & $($mutability)? this.values[internal_index],
+                tag: *tag,
+                index
             })
         }
     }
@@ -124,7 +115,7 @@ macro_rules! get_before_impl {
             let this = $self;
             let index = index.checked_sub(this.offset)?.try_into().ok()?;
             let (previous_index_tag, previous_index) =
-                if let Some(current) = this.queue.get(index) {
+                if let Some(current) = this.info.get(index) {
                     let (previous_tag, previous_distance) =
                     tags.iter().copied()
                         .filter_map(|tag| Some((tag, *current.previous_with_tag.get(tag)?)))
@@ -137,13 +128,12 @@ macro_rules! get_before_impl {
                         .filter_map(|tag| Some((tag, *this.latest_with_tag.get(tag)?)))
                         .min_by_key(|(_, dist)| dist.clone())?;
                     let previous_index =
-                        this.queue.len()
+                        this.len()
                         .checked_sub(previous_distance.saturating_add(1))?;
                     (previous_tag, previous_index)
                 };
-            let item = get!(this.queue, previous_index $(, $mutability)?)?;
             Some(Item {
-                value: & $($mutability)? item.value,
+                value: get!(this.values, previous_index $(, $mutability)?)?,
                 tag: previous_index_tag,
                 index: (previous_index as u64).checked_add(this.offset)
                     .expect("Buffer index overflow")
@@ -167,7 +157,7 @@ macro_rules! get_after_impl {
                     // If the index given refers to an event after the start of
                     // the event buffer at present...
                     let index = index.try_into().ok()?;
-                    let current = this.queue.get(index)?;
+                    let current = this.info.get(index)?;
                     tags.iter().copied().map(|tag| {
                         (tag, if current.has_tag(tag) {
                             index
@@ -184,7 +174,7 @@ macro_rules! get_after_impl {
                                 // where k != k' can't lie before current_k' or
                                 // else previous_k should have been next_k, a
                                 // contradiction.
-                                this.queue.get(previous_index)
+                                this.info.get(previous_index)
                                     .map_or(usize::max_value(), |item| {
                                         index.saturating_add(
                                             item.next_with_tag.checked_sub(1)
@@ -210,9 +200,8 @@ macro_rules! get_after_impl {
                 };
             // Get the item at the minimum index and return its exterior-facing
             // index and a reference to the item itself.
-            let item = get!(this.queue, next_index $(, $mutability)?)?;
             Some(Item {
-                value: & $($mutability)? item.value,
+                value: get!(this.values, next_index $(, $mutability)?)?,
                 tag: next_index_tag,
                 index: (next_index as u64).checked_add(this.offset)
                     .expect("Buffer index overflow")
@@ -247,7 +236,8 @@ impl<T> TaggedBuffer<T> {
             offset: 0,
             first_with_tag: Sparse::new(),
             latest_with_tag: Sparse::new(),
-            queue: VecDeque::with_capacity(capacity),
+            info: VecDeque::with_capacity(capacity),
+            values: VecDeque::with_capacity(capacity),
         }
     }
 
@@ -261,7 +251,7 @@ impl<T> TaggedBuffer<T> {
     /// assert_eq!(buffer.len(), 4);
     /// ```
     pub fn len(&self) -> usize {
-        self.queue.len()
+        self.info.len()
     }
 
     /// The index which will be assigned to the next item to be added to the
@@ -279,7 +269,7 @@ impl<T> TaggedBuffer<T> {
     /// ```
     pub fn next_index(&self) -> u64 {
         self.offset
-            .checked_add(self.queue.len() as u64)
+            .checked_add(self.len() as u64)
             .expect("Buffer index overflow")
     }
 
@@ -313,7 +303,8 @@ impl<T> TaggedBuffer<T> {
     /// ```
     pub fn clear(&mut self) {
         self.first_with_tag.clear();
-        self.queue.clear();
+        self.info.clear();
+        self.values.clear();
     }
 
     /// Get a reference to the first item *exactly at* `index`.
@@ -642,20 +633,19 @@ impl<T> TaggedBuffer<T> {
         // every time something is popped:
         let popped_index = self.offset;
         // Pop off the least recent item:
-        let mut popped = self.queue.pop_front()?;
+        let mut popped_info = self.info.pop_front()?;
+        let popped_value = self.values.pop_front()?;
         // Decrement the forward distance for first_with_tag of every
         // event tag *except* the current
-        let mut popped_tag = None;
         let first_with_tag_len = self.first_with_tag.len();
-        let queue_len = self.queue.len();
+        let queue_len = self.len();
         // Remove all first_with_tag references that extend past the queue, and
         // subtract one from those that don't -- with the exception of the tag
         // which is being removed, which should be set to the index of the next
         // of that tag
         self.first_with_tag.retain(|t, dist| {
-            if popped.has_tag(t) {
-                *dist = popped.next_with_tag;
-                popped_tag = Some(t);
+            if popped_info.has_tag(t) {
+                *dist = popped_info.next_with_tag;
             }
             // It's safe to .unwrap() below because:
             // - if popped.has_tag(k), then *dist = popped.next_with_tag
@@ -680,17 +670,17 @@ impl<T> TaggedBuffer<T> {
             self.first_with_tag.shrink_to_fit();
         }
         // Clear the vec but retain its memory
-        popped.previous_with_tag.clear();
+        popped_info.previous_with_tag.clear();
         // Bump the offset because we just shifted the queue
         self.offset = self.offset.checked_add(1).expect("Buffer index overflow");
         // Return the pieces
         Some((
             Item {
-                value: popped.value,
-                tag: popped_tag.expect("No 0 element in popped item"),
+                value: popped_value,
+                tag: popped_info.tag,
                 index: popped_index,
             },
-            popped.previous_with_tag,
+            popped_info.previous_with_tag,
         ))
     }
 
@@ -741,17 +731,17 @@ impl<T> TaggedBuffer<T> {
     ) -> (u64, Option<Item<T>>) {
         // Calculate the backward distance to the previous of this tag.
         let distance_to_previous = self
-            .queue
+            .info
             .back()
             .and_then(|latest| latest.previous_with_tag.get(tag).copied())
             .unwrap_or(usize::max_value())
             .saturating_add(1);
         // Find the previous of this tag, if any, and set its next_with_tag
         // pointer to point to this new item
-        self.queue
+        self.info
             .len()
             .checked_sub(distance_to_previous)
-            .and_then(|i| self.queue.get_mut(i))
+            .and_then(|i| self.info.get_mut(i))
             .map(|item| item.next_with_tag = distance_to_previous);
         // Get a fresh vector for tracking the distance to all previous events,
         // either by reclaiming memory of the least recent event (if directed to
@@ -767,12 +757,12 @@ impl<T> TaggedBuffer<T> {
         };
         // Populate the vector with the relative backward distances to the
         // previous events of each tag.
-        if let Some(latest) = self.queue.back() {
+        if let Some(latest) = self.info.back() {
             let mut tag_inserted = false;
             for (t, dist) in latest.previous_with_tag.iter() {
                 match t.cmp(&tag) {
                     Ordering::Less => {
-                        if *dist < self.queue.len() {
+                        if *dist < self.info.len() {
                             previous_with_tag.entry(t).insert(dist.saturating_add(1));
                         }
                     }
@@ -785,7 +775,7 @@ impl<T> TaggedBuffer<T> {
                             previous_with_tag.entry(tag).insert(0);
                             tag_inserted = true;
                         }
-                        if *dist < self.queue.len() {
+                        if *dist < self.info.len() {
                             previous_with_tag.entry(t).insert(dist.saturating_add(1));
                         }
                     }
@@ -801,15 +791,16 @@ impl<T> TaggedBuffer<T> {
         // Free memory from the given vec that isn't necessary anymore
         previous_with_tag.shrink_to_fit();
         // Actually insert the item into the queue
-        self.queue.push_back(InternalItem {
-            value,
+        self.info.push_back(Info {
+            tag,
             next_with_tag: usize::max_value(),
             previous_with_tag,
         });
+        self.values.push_back(value);
         // Make sure first_with_tag tracks this event, if it is the current
         // first of its tag:
         if self.first_with_tag.get(tag).is_none() {
-            self.first_with_tag.entry(tag).insert(self.queue.len() - 1);
+            self.first_with_tag.entry(tag).insert(self.info.len() - 1);
         }
         // Make sure latest_with_tag tracks this event
         for dist in self.latest_with_tag.values_mut() {
@@ -818,7 +809,7 @@ impl<T> TaggedBuffer<T> {
         self.latest_with_tag.entry(tag).insert(0); // this tag: right here
         // Calculate the index of the just-inserted thing
         (self.offset
-         .checked_add(self.queue.len() as u64)
+         .checked_add(self.len() as u64)
          .expect("Buffer index overflow") - 1,
          popped_item)
     }
@@ -835,6 +826,29 @@ impl<T> FromIterator<(usize, T)> for TaggedBuffer<T> {
     }
 }
 
+/// An iterator over immutable references to items in a buffer.
+struct Iter<'a, 'b, T> {
+    inner: &'a TaggedBuffer<T>,
+    tags: &'b [usize],
+    index_latest: u64,
+    index_earliest: u64,
+}
+
+/// An iterator over mutable references to items in a buffer.
+struct IterMut<'a, 'b, T> {
+    inner: &'a mut TaggedBuffer<T>,
+    tags: &'b [usize],
+    index_latest: u64,
+    index_earliest: u64,
+}
+
+/// An iterator constructed by consuming the items from a buffer.
+struct IntoIter<T> {
+    inner: VecDeque<T>,
+    index_latest: u64,
+    index_earliest: u64,
+}
+
 impl<T: std::fmt::Display> std::fmt::Display for TaggedBuffer<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         let max_spaces = format!(
@@ -846,7 +860,7 @@ impl<T: std::fmt::Display> std::fmt::Display for TaggedBuffer<T> {
                 .unwrap_or(&0)
                 .max(
                     &self
-                        .queue
+                        .info
                         .iter()
                         .map(|i| {
                             (if i.next_with_tag == usize::max_value() {
@@ -868,7 +882,7 @@ impl<T: std::fmt::Display> std::fmt::Display for TaggedBuffer<T> {
         )
         .len();
         let max_width = self
-            .queue
+            .info
             .iter()
             .map(|i| i.previous_with_tag.len())
             .max()
@@ -901,7 +915,7 @@ impl<T: std::fmt::Display> std::fmt::Display for TaggedBuffer<T> {
                 spaces(f, format!("  "))?;
             }
         }
-        for i in &self.queue {
+        for (i, value) in self.info.iter().zip(self.values.iter()) {
             write!(f, "\n")?;
             for t in 0..max_width {
                 if let Some(d) = i.previous_with_tag.get(t) {
@@ -929,7 +943,7 @@ impl<T: std::fmt::Display> std::fmt::Display for TaggedBuffer<T> {
                     spaces(f, "  ⋮ ".to_string())?;
                 }
             }
-            write!(f, " | {}", i.value)?
+            write!(f, " | {}", value)?
         }
         Ok(())
     }
