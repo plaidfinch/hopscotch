@@ -27,9 +27,9 @@ fn main() {
                     println!("{}", buffer);
                     println!("Result: {:?}", r);
                 }
-                ["get_after", i, ks @ ..] => {
+                ["after", i, ks @ ..] => {
                     let tags: Vec<usize> = ks.iter().map(|k| k.trim().parse().unwrap()).collect();
-                    let r = buffer.get_after(i.trim().parse().unwrap(), &tags);
+                    let r = buffer.after(i.trim().parse().unwrap(), &tags);
                     println!("Result: {:?}", &r);
                 }
                 l => println!("Unrecognized command: {:?}", l),

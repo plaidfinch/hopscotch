@@ -17,13 +17,13 @@ pub use sparse::Sparse;
 /// inserted item is given an index one greater than that inserted before it.
 ///
 /// In addition to supporting the ordinary `push`, `pop`, and `get` methods of a
-/// FIFO queue, a `Queue` supports the methods `get_after` and `get_after`
-/// (and their respective `mut` variants), which query the queue to determine
-/// the next item in the queue whose `tag` is any of a given set of tags. These
-/// methods run in linear time relative to the number of tags queried,
-/// logarithmic time relative to the total number of distinct tags in the queue,
-/// and constant time relative to the size of the queue and the distance between
-/// successive items of the same tag.
+/// FIFO queue, a `Queue` supports the methods `after` and `before` (and their
+/// respective `mut` variants), which query the queue to determine the next item
+/// in the queue whose `tag` is any of a given set of tags. These methods run in
+/// linear time relative to the number of tags queried, logarithmic time
+/// relative to the total number of distinct tags in the queue, and constant
+/// time relative to the size of the queue and the distance between successive
+/// items of the same tag.
 ///
 /// This data structure performs best and uses the least memory when the set of
 /// tags is small and mostly unchanging across the lifetime of the queue. A
@@ -101,11 +101,11 @@ macro_rules! get_impl {
     }
 }
 
-/// This macro implements both "get_before" variations: both immutable and
+/// This macro implements both "before" variations: both immutable and
 /// mutable. It must be a macro because while all the code is operationally the
 /// same regardless of mutability, Rust does not (yet) have mutability
 /// polymorphism.
-macro_rules! get_before_impl {
+macro_rules! before_impl {
     ($self:expr, $index:expr, $tags:expr $(, $mutability:tt)?) => {
         {
             let index = $index;
@@ -140,11 +140,11 @@ macro_rules! get_before_impl {
     };
 }
 
-/// This macro implements both "get_after" variations: both immutable and
+/// This macro implements both "after" variations: both immutable and
 /// mutable. It must be a macro because while all the code is operationally the
 /// same regardless of mutability, Rust does not (yet) have mutability
 /// polymorphism.
-macro_rules! get_after_impl {
+macro_rules! after_impl {
     ($self:expr, $index:expr, $tags:expr $(, $mutability:tt)?) => {
         {
             let index = $index;
@@ -412,9 +412,9 @@ impl<T> Queue<T> {
     /// #        (1, "Bonjour".to_string()),
     /// #        (0, "world!".to_string()),
     /// #        (1, "le monde!".to_string())].into_iter().collect();
-    /// assert_eq!(queue.get_after(0, &[0]).unwrap().value, "Hello");
-    /// assert_eq!(queue.get_after(0, &[1]).unwrap().value, "Bonjour");
-    /// assert_eq!(queue.get_after(0, &[0, 1]).unwrap().value, "Hello");
+    /// assert_eq!(queue.after(0, &[0]).unwrap().value, "Hello");
+    /// assert_eq!(queue.after(0, &[1]).unwrap().value, "Bonjour");
+    /// assert_eq!(queue.after(0, &[0, 1]).unwrap().value, "Hello");
     /// ```
     ///
     /// Starting *inclusively after* index 1:
@@ -426,9 +426,9 @@ impl<T> Queue<T> {
     /// #        (1, "Bonjour".to_string()),
     /// #        (0, "world!".to_string()),
     /// #        (1, "le monde!".to_string())].into_iter().collect();
-    /// assert_eq!(queue.get_after(1, &[0]).unwrap().value, "world!");
-    /// assert_eq!(queue.get_after(1, &[1]).unwrap().value, "Bonjour");
-    /// assert_eq!(queue.get_after(1, &[0, 1]).unwrap().value, "Bonjour");
+    /// assert_eq!(queue.after(1, &[0]).unwrap().value, "world!");
+    /// assert_eq!(queue.after(1, &[1]).unwrap().value, "Bonjour");
+    /// assert_eq!(queue.after(1, &[0, 1]).unwrap().value, "Bonjour");
     /// ```
     ///
     /// Starting *inclusively after* index 2:
@@ -440,9 +440,9 @@ impl<T> Queue<T> {
     /// #        (1, "Bonjour".to_string()),
     /// #        (0, "world!".to_string()),
     /// #        (1, "le monde!".to_string())].into_iter().collect();
-    /// assert_eq!(queue.get_after(2, &[0]).unwrap().value, "world!");
-    /// assert_eq!(queue.get_after(2, &[1]).unwrap().value, "le monde!");
-    /// assert_eq!(queue.get_after(2, &[0, 1]).unwrap().value, "world!");
+    /// assert_eq!(queue.after(2, &[0]).unwrap().value, "world!");
+    /// assert_eq!(queue.after(2, &[1]).unwrap().value, "le monde!");
+    /// assert_eq!(queue.after(2, &[0, 1]).unwrap().value, "world!");
     /// ```
     ///
     /// Starting *inclusively after* index 3:
@@ -454,9 +454,9 @@ impl<T> Queue<T> {
     /// #        (1, "Bonjour".to_string()),
     /// #        (0, "world!".to_string()),
     /// #        (1, "le monde!".to_string())].into_iter().collect();
-    /// assert!(queue.get_after(3, &[0]).is_none());
-    /// assert_eq!(queue.get_after(3, &[1]).unwrap().value, "le monde!");
-    /// assert_eq!(queue.get_after(3, &[0, 1]).unwrap().value, "le monde!");
+    /// assert!(queue.after(3, &[0]).is_none());
+    /// assert_eq!(queue.after(3, &[1]).unwrap().value, "le monde!");
+    /// assert_eq!(queue.after(3, &[0, 1]).unwrap().value, "le monde!");
     /// ```
     ///
     /// Starting *inclusively after* index 4:
@@ -468,18 +468,18 @@ impl<T> Queue<T> {
     /// #        (1, "Bonjour".to_string()),
     /// #        (0, "world!".to_string()),
     /// #        (1, "le monde!".to_string())].into_iter().collect();
-    /// assert!(queue.get_after(4, &[0]).is_none());
-    /// assert!(queue.get_after(4, &[1]).is_none());
-    /// assert!(queue.get_after(4, &[0, 1]).is_none());
+    /// assert!(queue.after(4, &[0]).is_none());
+    /// assert!(queue.after(4, &[1]).is_none());
+    /// assert!(queue.after(4, &[0, 1]).is_none());
     /// ```
-    pub fn get_after(&self, index: u64, tags: &[usize]) -> Option<Item<&T>> {
-        get_after_impl!(self, index, tags)
+    pub fn after(&self, index: u64, tags: &[usize]) -> Option<Item<&T>> {
+        after_impl!(self, index, tags)
     }
 
     /// Get a mutable reference to the first item after or including `index`
     /// whose tag is one of those given.
     ///
-    /// This uses the same semantics for lookup as `get_after`: see its
+    /// This uses the same semantics for lookup as `after`: see its
     /// documentation for more examples.
     ///
     /// # Examples
@@ -497,15 +497,15 @@ impl<T> Queue<T> {
     ///          (0, "world!".to_string()),
     ///          (1, "le monde!".to_string())].into_iter().collect();
     ///
-    /// let beginning = 0; // same start index for both calls to `get_after_mut`
-    /// *queue.get_after_mut(beginning, &[0]).unwrap().value = "Goodbye".to_string();
-    /// *queue.get_after_mut(beginning, &[1]).unwrap().value = "Au revoir".to_string();
+    /// let beginning = 0; // same start index for both calls to `after_mut`
+    /// *queue.after_mut(beginning, &[0]).unwrap().value = "Goodbye".to_string();
+    /// *queue.after_mut(beginning, &[1]).unwrap().value = "Au revoir".to_string();
     ///
     /// assert_eq!(queue.get(0).unwrap().value, "Goodbye");
     /// assert_eq!(queue.get(1).unwrap().value, "Au revoir");
     /// ```
-    pub fn get_after_mut(&mut self, index: u64, tags: &[usize]) -> Option<Item<&mut T>> {
-        get_after_impl!(self, index, tags, mut)
+    pub fn after_mut(&mut self, index: u64, tags: &[usize]) -> Option<Item<&mut T>> {
+        after_impl!(self, index, tags, mut)
     }
 
     /// Get a reference to the latest item before or including `index` whose tag
@@ -538,9 +538,9 @@ impl<T> Queue<T> {
     /// #        (1, "Bonjour".to_string()),
     /// #        (0, "world!".to_string()),
     /// #        (1, "le monde!".to_string())].into_iter().collect();
-    /// assert_eq!(queue.get_before(4, &[0]).unwrap().value, "world!");
-    /// assert_eq!(queue.get_before(4, &[1]).unwrap().value, "le monde!");
-    /// assert_eq!(queue.get_before(4, &[0, 1]).unwrap().value, "le monde!");
+    /// assert_eq!(queue.before(4, &[0]).unwrap().value, "world!");
+    /// assert_eq!(queue.before(4, &[1]).unwrap().value, "le monde!");
+    /// assert_eq!(queue.before(4, &[0, 1]).unwrap().value, "le monde!");
     /// ```
     ///
     /// Starting *inclusively before* index 3 (the end of the queue), we get
@@ -553,9 +553,9 @@ impl<T> Queue<T> {
     /// #        (1, "Bonjour".to_string()),
     /// #        (0, "world!".to_string()),
     /// #        (1, "le monde!".to_string())].into_iter().collect();
-    /// assert_eq!(queue.get_before(3, &[0]).unwrap().value, "world!");
-    /// assert_eq!(queue.get_before(3, &[1]).unwrap().value, "le monde!");
-    /// assert_eq!(queue.get_before(3, &[0, 1]).unwrap().value, "le monde!");
+    /// assert_eq!(queue.before(3, &[0]).unwrap().value, "world!");
+    /// assert_eq!(queue.before(3, &[1]).unwrap().value, "le monde!");
+    /// assert_eq!(queue.before(3, &[0, 1]).unwrap().value, "le monde!");
     /// ```
     ///
     /// Starting *inclusively before* index 2:
@@ -567,9 +567,9 @@ impl<T> Queue<T> {
     /// #        (1, "Bonjour".to_string()),
     /// #        (0, "world!".to_string()),
     /// #        (1, "le monde!".to_string())].into_iter().collect();
-    /// assert_eq!(queue.get_before(2, &[0]).unwrap().value, "world!");
-    /// assert_eq!(queue.get_before(2, &[1]).unwrap().value, "Bonjour");
-    /// assert_eq!(queue.get_before(2, &[0, 1]).unwrap().value, "world!");
+    /// assert_eq!(queue.before(2, &[0]).unwrap().value, "world!");
+    /// assert_eq!(queue.before(2, &[1]).unwrap().value, "Bonjour");
+    /// assert_eq!(queue.before(2, &[0, 1]).unwrap().value, "world!");
     /// ```
     ///
     /// Starting *inclusively before* index 1:
@@ -581,9 +581,9 @@ impl<T> Queue<T> {
     /// #        (1, "Bonjour".to_string()),
     /// #        (0, "world!".to_string()),
     /// #        (1, "le monde!".to_string())].into_iter().collect();
-    /// assert_eq!(queue.get_before(1, &[0]).unwrap().value, "Hello");
-    /// assert_eq!(queue.get_before(1, &[1]).unwrap().value, "Bonjour");
-    /// assert_eq!(queue.get_before(1, &[0, 1]).unwrap().value, "Bonjour");
+    /// assert_eq!(queue.before(1, &[0]).unwrap().value, "Hello");
+    /// assert_eq!(queue.before(1, &[1]).unwrap().value, "Bonjour");
+    /// assert_eq!(queue.before(1, &[0, 1]).unwrap().value, "Bonjour");
     /// ```
     ///
     /// Starting *inclusively before* index 0:
@@ -595,18 +595,18 @@ impl<T> Queue<T> {
     /// #        (1, "Bonjour".to_string()),
     /// #        (0, "world!".to_string()),
     /// #        (1, "le monde!".to_string())].into_iter().collect();
-    /// assert_eq!(queue.get_before(0, &[0]).unwrap().value, "Hello");
-    /// assert!(queue.get_before(0, &[1]).is_none());
-    /// assert_eq!(queue.get_before(0, &[0, 1]).unwrap().value, "Hello");
+    /// assert_eq!(queue.before(0, &[0]).unwrap().value, "Hello");
+    /// assert!(queue.before(0, &[1]).is_none());
+    /// assert_eq!(queue.before(0, &[0, 1]).unwrap().value, "Hello");
     /// ```
-    pub fn get_before(&self, index: u64, tags: &[usize]) -> Option<Item<&T>> {
-        get_before_impl!(self, index, tags)
+    pub fn before(&self, index: u64, tags: &[usize]) -> Option<Item<&T>> {
+        before_impl!(self, index, tags)
     }
 
     /// Get a mutable reference to the latest item before or including `index`
     /// whose tag is one of those given.
     ///
-    /// This uses the same semantics for lookup as `get_before`: see its
+    /// This uses the same semantics for lookup as `before`: see its
     /// documentation for more examples.
     ///
     /// # Examples
@@ -624,15 +624,15 @@ impl<T> Queue<T> {
     ///          (0, "world!".to_string()),
     ///          (1, "le monde!".to_string())].into_iter().collect();
     ///
-    /// let end = 5; // same end index for both calls to `get_after_mut`
-    /// *queue.get_before_mut(end, &[0]).unwrap().value = "my friends!".to_string();
-    /// *queue.get_before_mut(end, &[1]).unwrap().value = "mes amis!".to_string();
+    /// let end = 5; // same end index for both calls to `after_mut`
+    /// *queue.before_mut(end, &[0]).unwrap().value = "my friends!".to_string();
+    /// *queue.before_mut(end, &[1]).unwrap().value = "mes amis!".to_string();
     ///
     /// assert_eq!(queue.get(2).unwrap().value, "my friends!");
     /// assert_eq!(queue.get(3).unwrap().value, "mes amis!");
     /// ```
-    pub fn get_before_mut(&mut self, index: u64, tags: &[usize]) -> Option<Item<&mut T>> {
-        get_before_impl!(self, index, tags, mut)
+    pub fn before_mut(&mut self, index: u64, tags: &[usize]) -> Option<Item<&mut T>> {
+        before_impl!(self, index, tags, mut)
     }
 
     /// Pop an item off the back of the queue and return it.
@@ -858,8 +858,11 @@ impl<T> Queue<T> {
 
     /// Get an iterator of immutable items matching any of the given tags, whose
     /// indices are inclusively between `earliest` and `latest`, in order from
-    /// lowest to highest index. The returned iterator is double-ended, and
-    /// therefore can be traversed in reverse order using the `.rev()` method.
+    /// lowest to highest index. If `None` is provided for `tags`, every item
+    /// between the two bounds is enumerated.
+    ///
+    /// The returned iterator is double-ended, and therefore can be traversed in
+    /// reverse order using the `.rev()` method.
     ///
     /// # Examples
     ///
@@ -886,7 +889,7 @@ impl<T> Queue<T> {
         &'a self,
         earliest: u64,
         latest: u64,
-        tags: &'b [usize],
+        tags: Option<&'b [usize]>,
     ) -> Iter<'a, 'b, T> {
         Iter {
             inner: self,
@@ -898,8 +901,11 @@ impl<T> Queue<T> {
 
     /// Get an iterator of mutable items matching any of the given tags, whose
     /// indices are inclusively between `earliest` and `latest`, in order from
-    /// lowest to highest index. The returned iterator is double-ended, and
-    /// therefore can be traversed in reverse order using the `.rev()` method.
+    /// lowest to highest index. If `None` is provided for `tags`, every item
+    /// between the two bounds is enumerated.
+    ///
+    /// The returned iterator is double-ended, and therefore can be traversed in
+    /// reverse order using the `.rev()` method.
     ///
     /// # Examples
     ///
@@ -925,7 +931,7 @@ impl<T> Queue<T> {
         &'a mut self,
         earliest: u64,
         latest: u64,
-        tags: &'b [usize],
+        tags: Option<&'b [usize]>,
     ) -> IterMut<'a, 'b, T> {
         IterMut {
             inner: self,
@@ -950,10 +956,18 @@ impl<T> FromIterator<(usize, T)> for Queue<T> {
     }
 }
 
+impl<T> Extend<(usize, T)> for Queue<T> {
+    fn extend<I>(&mut self, iter: I) where I: IntoIterator<Item = (usize, T)> {
+        for (tag, item) in iter {
+            self.push(tag, item);
+        }
+    }
+}
+
 /// An iterator over immutable references to items in a queue.
 pub struct Iter<'a, 'b, T> {
     inner: &'a Queue<T>,
-    tags: &'b [usize],
+    tags: Option<&'b [usize]>,
     index_latest: u64,
     index_earliest: u64,
 }
@@ -963,7 +977,11 @@ impl<'a, 'b, T> Iterator for Iter<'a, 'b, T> {
 
     fn next(&mut self) -> Option<Self::Item> {
         if self.index_earliest <= self.index_latest {
-            let item = self.inner.get_after(self.index_earliest, self.tags)?;
+            let item = if let Some(tags) = self.tags {
+                self.inner.after(self.index_earliest, tags)
+            } else {
+                self.inner.get(self.index_earliest)
+            }?;
             self.index_earliest = item.index.checked_add(1)?;
             Some(item)
         } else {
@@ -975,7 +993,11 @@ impl<'a, 'b, T> Iterator for Iter<'a, 'b, T> {
 impl<'a, 'b, T> DoubleEndedIterator for Iter<'a, 'b, T> {
     fn next_back(&mut self) -> Option<Self::Item> {
         if self.index_earliest <= self.index_latest {
-            let item = self.inner.get_before(self.index_latest, self.tags)?;
+            let item = if let Some(tags) = self.tags {
+                self.inner.before(self.index_latest, tags)
+            } else {
+                self.inner.get(self.index_latest)
+            }?;
             self.index_latest = item.index.checked_sub(1)?;
             Some(item)
         } else {
@@ -987,7 +1009,7 @@ impl<'a, 'b, T> DoubleEndedIterator for Iter<'a, 'b, T> {
 /// An iterator over mutable references to items in a queue.
 pub struct IterMut<'a, 'b, T: 'a> {
     inner: &'a mut Queue<T>,
-    tags: &'b [usize],
+    tags: Option<&'b [usize]>,
     index_latest: u64,
     index_earliest: u64,
 }
@@ -1002,7 +1024,11 @@ impl<'a, 'b, T> Iterator for IterMut<'a, 'b, T> {
 
     fn next(&'_ mut self) -> Option<Item<&'a mut T>> {
         if self.index_earliest <= self.index_latest {
-            let item = self.inner.get_after_mut(self.index_earliest, self.tags)?;
+            let item = if let Some(tags) = self.tags {
+                self.inner.after_mut(self.index_earliest, tags)
+            } else {
+                self.inner.get_mut(self.index_earliest)
+            }?;
             self.index_earliest = item.index.checked_add(1)?;
             Some(Item {
                 index: item.index,
@@ -1018,7 +1044,11 @@ impl<'a, 'b, T> Iterator for IterMut<'a, 'b, T> {
 impl<'a, 'b, T> DoubleEndedIterator for IterMut<'a, 'b, T> {
     fn next_back(&mut self) -> Option<Self::Item> {
         if self.index_earliest <= self.index_latest {
-            let item = self.inner.get_before_mut(self.index_latest, self.tags)?;
+            let item = if let Some(tags) = self.tags {
+                self.inner.before_mut(self.index_latest, tags)
+            } else {
+                self.inner.get_mut(self.index_latest)
+            }?;
             self.index_latest = item.index.checked_sub(1)?;
             Some(Item {
                 index: item.index,
