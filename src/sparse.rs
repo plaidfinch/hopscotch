@@ -380,9 +380,23 @@ impl<T> FromIterator<(usize, T)> for Sparse<T> {
     fn from_iter<I: IntoIterator<Item = (usize, T)>>(iter: I) -> Sparse<T> {
         let mut sparse = Sparse::new();
         for (index, item) in iter {
-            sparse.entry(index).or_insert(item);
+            sparse.entry(index).insert(item);
         }
         sparse
+    }
+}
+
+impl<T> Extend<(usize, T)> for Sparse<T> {
+    fn extend<I: IntoIterator<Item = (usize, T)>>(&mut self, iter: I) {
+        for (index, item) in iter {
+            self.entry(index).insert(item);
+        }
+    }
+}
+
+impl<T> Default for Sparse<T> {
+    fn default() -> Self {
+        Sparse::new()
     }
 }
 
