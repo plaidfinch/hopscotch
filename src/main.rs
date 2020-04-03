@@ -11,25 +11,30 @@ fn main() {
                 ["push", k] => {
                     let tag = k.trim().parse().unwrap();
                     let i = buffer.push(tag, count);
-                    println!("{}", buffer);
+                    println!("{:#?}", buffer);
                     println!("Result: {:?}", i);
                     count += 1;
                 }
                 ["push_and_pop", k] => {
                     let tag = k.trim().parse().unwrap();
                     let i = buffer.push_and_pop(tag, count, false);
-                    println!("{}", buffer);
+                    println!("{:#?}", buffer);
                     println!("Result: {:?}", i);
                     count += 1;
                 }
                 ["pop"] => {
                     let r = buffer.pop();
-                    println!("{}", buffer);
+                    println!("{:#?}", buffer);
                     println!("Result: {:?}", r);
                 }
                 ["after", i, ks @ ..] => {
                     let tags: Vec<usize> = ks.iter().map(|k| k.trim().parse().unwrap()).collect();
                     let r = buffer.after(i.trim().parse().unwrap(), &tags);
+                    println!("Result: {:?}", &r);
+                }
+                ["before", i, ks @ ..] => {
+                    let tags: Vec<usize> = ks.iter().map(|k| k.trim().parse().unwrap()).collect();
+                    let r = buffer.before(i.trim().parse().unwrap(), &tags);
                     println!("Result: {:?}", &r);
                 }
                 l => println!("Unrecognized command: {:?}", l),

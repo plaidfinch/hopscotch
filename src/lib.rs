@@ -174,9 +174,8 @@ macro_rules! after_impl {
                                 // contradiction.
                                 this.info.get(previous_index)
                                     .map_or(usize::max_value(), |item| {
-                                        index.saturating_add(
-                                            item.next_with_tag.checked_sub(1)
-                                                .expect("next_with_tag field should never be zero")
+                                        previous_index.saturating_add(
+                                            item.next_with_tag
                                         )})
                             } else {
                                 // If previous_index is < 0, then find index of
@@ -184,8 +183,9 @@ macro_rules! after_impl {
                                 // there were no preceding events of the
                                 // particular tag, but there might be ones in
                                 // the future of it.
-                                *this.first_with_tag.get(tag)
-                                    .unwrap_or(&usize::max_value())
+                                let first_index = *this.first_with_tag.get(tag)
+                                    .unwrap_or(&usize::max_value());
+                                first_index
                             }
                         })
                     }).min_by_key(|(_, i)| i.clone())?
@@ -876,14 +876,14 @@ impl<T> Queue<T> {
     ///          (1, "le monde!".to_string())].into_iter().collect();
     ///
     /// let english: Vec<&str> =
-    ///     queue.iter_between(0, u64::max_value(), &[0])
+    ///     queue.iter_between(0, u64::max_value(), Some(&[0]))
     ///     .map(|i| i.value.as_ref()).collect();
     /// assert_eq!(english, &["Hello", "world!"]);
     ///
-    /// let french_backwards: Vec<&str> =
-    ///     queue.iter_between(0, u64::max_value(), &[1]).rev() // <-- notice the reversal
+    /// let all_backwards: Vec<&str> =
+    ///     queue.iter_between(0, u64::max_value(), None).rev() // <-- notice the reversal
     ///     .map(|i| i.value.as_ref()).collect();
-    /// assert_eq!(french_backwards, &["le monde!", "Bonjour"]);
+    /// assert_eq!(all_backwards, &["le monde!", "world!", "Bonjour", "Hello"]);
     /// ```
     pub fn iter_between<'a, 'b>(
         &'a self,
@@ -891,12 +891,9 @@ impl<T> Queue<T> {
         latest: u64,
         tags: Option<&'b [usize]>,
     ) -> Iter<'a, 'b, T> {
-        Iter {
-            inner: self,
-            tags: tags,
-            index_latest: latest,
-            index_earliest: earliest,
-        }
+        let head = Some(self.next_index().saturating_sub(1).min(latest));
+        let tail = Some(self.first_index().max(earliest));
+        Iter{inner: self, tags, head, tail}
     }
 
     /// Get an iterator of mutable items matching any of the given tags, whose
@@ -918,12 +915,12 @@ impl<T> Queue<T> {
     ///          (0, "world!".to_string()),
     ///          (1, "le monde!".to_string())].into_iter().collect();
     ///
-    /// for item in queue.iter_between_mut(0, u64::max_value(), &[0]) {
+    /// for item in queue.iter_between_mut(0, u64::max_value(), Some(&[0])) {
     ///    *item.value = item.value.to_uppercase();
     /// }
     ///
     /// let words: Vec<&str> =
-    ///     queue.iter_between(0, u64::max_value(), &[0, 1])
+    ///     queue.iter_between(0, u64::max_value(), None)
     ///     .map(|i| i.value.as_ref()).collect();
     /// assert_eq!(words, &["HELLO", "Bonjour", "WORLD!", "le monde!"]);
     /// ```
@@ -933,12 +930,9 @@ impl<T> Queue<T> {
         latest: u64,
         tags: Option<&'b [usize]>,
     ) -> IterMut<'a, 'b, T> {
-        IterMut {
-            inner: self,
-            tags: tags,
-            index_latest: latest,
-            index_earliest: earliest,
-        }
+        let head = Some(self.next_index().saturating_sub(1).min(latest));
+        let tail = Some(self.first_index().max(earliest));
+        IterMut{inner: self, tags, head, tail}
     }
 }
 
@@ -968,41 +962,45 @@ impl<T> Extend<(usize, T)> for Queue<T> {
 pub struct Iter<'a, 'b, T> {
     inner: &'a Queue<T>,
     tags: Option<&'b [usize]>,
-    index_latest: u64,
-    index_earliest: u64,
+    head: Option<u64>,
+    tail: Option<u64>,
 }
 
 impl<'a, 'b, T> Iterator for Iter<'a, 'b, T> {
     type Item = Item<&'a T>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        if self.index_earliest <= self.index_latest {
-            let item = if let Some(tags) = self.tags {
-                self.inner.after(self.index_earliest, tags)
-            } else {
-                self.inner.get(self.index_earliest)
-            }?;
-            self.index_earliest = item.index.checked_add(1)?;
-            Some(item)
-        } else {
-            None
+        if self.tail? > self.head? {
+            return None;
         }
+        let item = if let Some(tags) = self.tags {
+            self.inner.after(self.tail?, tags)
+        } else {
+            self.inner.get(self.tail?)
+        }?;
+        self.tail = item.index.checked_add(1);
+        if item.index > self.head? {
+            return None;
+        }
+        Some(item)
     }
 }
 
 impl<'a, 'b, T> DoubleEndedIterator for Iter<'a, 'b, T> {
     fn next_back(&mut self) -> Option<Self::Item> {
-        if self.index_earliest <= self.index_latest {
-            let item = if let Some(tags) = self.tags {
-                self.inner.before(self.index_latest, tags)
-            } else {
-                self.inner.get(self.index_latest)
-            }?;
-            self.index_latest = item.index.checked_sub(1)?;
-            Some(item)
-        } else {
-            None
+        if self.tail? > self.head? {
+            return None;
         }
+        let item = if let Some(tags) = self.tags {
+            self.inner.before(self.head?, tags)
+        } else {
+            self.inner.get(self.head?)
+        }?;
+        self.head = item.index.checked_sub(1);
+        if item.index < self.tail? {
+            return None;
+        }
+        Some(item)
     }
 }
 
@@ -1010,8 +1008,8 @@ impl<'a, 'b, T> DoubleEndedIterator for Iter<'a, 'b, T> {
 pub struct IterMut<'a, 'b, T: 'a> {
     inner: &'a mut Queue<T>,
     tags: Option<&'b [usize]>,
-    index_latest: u64,
-    index_earliest: u64,
+    head: Option<u64>,
+    tail: Option<u64>,
 }
 
 // A note on unsafe blocks below: the potential unsafety here would result from
@@ -1023,41 +1021,45 @@ impl<'a, 'b, T> Iterator for IterMut<'a, 'b, T> {
     type Item = Item<&'a mut T>;
 
     fn next(&'_ mut self) -> Option<Item<&'a mut T>> {
-        if self.index_earliest <= self.index_latest {
-            let item = if let Some(tags) = self.tags {
-                self.inner.after_mut(self.index_earliest, tags)
-            } else {
-                self.inner.get_mut(self.index_earliest)
-            }?;
-            self.index_earliest = item.index.checked_add(1)?;
-            Some(Item {
-                index: item.index,
-                tag: item.tag,
-                value: unsafe { &mut *(item.value as *mut _) },
-            })
-        } else {
-            None
+        if self.tail? > self.head? {
+            return None;
         }
+        let item = if let Some(tags) = self.tags {
+            self.inner.after_mut(self.tail?, tags)
+        } else {
+            self.inner.get_mut(self.tail?)
+        }?;
+        self.tail = item.index.checked_add(1);
+        if item.index > self.head? {
+            return None;
+        }
+        Some(Item {
+            value: unsafe { &mut *(item.value as *mut _) },
+            index: item.index,
+            tag: item.tag,
+        })
     }
 }
 
 impl<'a, 'b, T> DoubleEndedIterator for IterMut<'a, 'b, T> {
     fn next_back(&mut self) -> Option<Self::Item> {
-        if self.index_earliest <= self.index_latest {
-            let item = if let Some(tags) = self.tags {
-                self.inner.before_mut(self.index_latest, tags)
-            } else {
-                self.inner.get_mut(self.index_latest)
-            }?;
-            self.index_latest = item.index.checked_sub(1)?;
-            Some(Item {
-                index: item.index,
-                tag: item.tag,
-                value: unsafe { &mut *(item.value as *mut _) },
-            })
-        } else {
-            None
+        if self.tail? > self.head? {
+            return None;
         }
+        let item = if let Some(tags) = self.tags {
+            self.inner.before_mut(self.head?, tags)
+        } else {
+            self.inner.get_mut(self.head?)
+        }?;
+        self.head = item.index.checked_sub(1);
+        if item.index < self.tail? {
+            return None;
+        }
+        Some(Item {
+            value: unsafe { &mut *(item.value as *mut _) },
+            index: item.index,
+            tag: item.tag,
+        })
     }
 }
 
