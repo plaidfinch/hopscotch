@@ -1,5 +1,6 @@
-use quickcheck::quickcheck;
-
+use quickcheck::{quickcheck, QuickCheck, Arbitrary, Gen};
+use std::fmt::Debug;
+use std::iter;
 use hopscotch;
 
 /// Check that two double-ended iterators are equal under the sequence of
@@ -86,6 +87,7 @@ quickcheck! {
 }
 
 /// An enumeration of operations that can be performed on a queue
+#[derive(Debug, Clone)]
 enum Operation<T> {
     Len,
     Clear,
@@ -93,23 +95,103 @@ enum Operation<T> {
     FirstIndex,
     ShrinkToFit,
     ShrinkAllToFit,
-    Get(usize),
-    GetMutAndSet(usize, T),
-    After(usize, Vec<usize>),
-    AfterMutAndSet(usize, Vec<usize>, T),
-    Before(usize, Vec<usize>),
-    BeforeMutAndSet(usize, Vec<usize>, T),
-    Push(T),
+    Get(u64),
+    GetMutAndSet(u64, T),
+    After(u64, Vec<usize>),
+    AfterMutAndSet(u64, Vec<usize>, T),
+    Before(u64, Vec<usize>),
+    BeforeMutAndSet(u64, Vec<usize>, T),
+    Push(usize, T),
     Pop,
-    PushAndPop(T),
+    PopAndPush(usize, T, bool),
 }
 
-fn simulate<T: Eq>(
+impl<T: Arbitrary> Arbitrary for Operation<T> {
+    fn arbitrary<G: Gen>(g: &mut G) -> Self {
+        use Operation::*;
+        match usize::arbitrary(g) % 15 {
+            0 => Len,
+            1 => Clear,
+            2 => NextIndex,
+            3 => FirstIndex,
+            4 => ShrinkToFit,
+            5 => ShrinkAllToFit,
+            6 => Get(u64::arbitrary(g)),
+            7 => GetMutAndSet(u64::arbitrary(g), T::arbitrary(g)),
+            8 => After(u64::arbitrary(g), Vec::arbitrary(g)),
+            9 => AfterMutAndSet(u64::arbitrary(g), Vec::arbitrary(g), T::arbitrary(g)),
+            10 => Before(u64::arbitrary(g), Vec::arbitrary(g)),
+            11 => BeforeMutAndSet(u64::arbitrary(g), Vec::arbitrary(g), T::arbitrary(g)),
+            12 => Push(usize::arbitrary(g), T::arbitrary(g)),
+            13 => Pop,
+            14 => PopAndPush(usize::arbitrary(g), T::arbitrary(g), bool::arbitrary(g)),
+            _ => panic!("Bad discriminant while generating operation!"),
+        }
+    }
+
+    fn shrink(&self) -> Box<dyn Iterator<Item = Self>> {
+        use Operation::*;
+        match self {
+            Len => Box::new(iter::empty()),
+            Clear => Box::new(iter::empty()),
+            NextIndex => Box::new(iter::empty()),
+            FirstIndex => Box::new(iter::empty()),
+            ShrinkToFit => Box::new(iter::empty()),
+            ShrinkAllToFit => Box::new(iter::empty()),
+            Get(index) => Box::new(index.shrink().map(Get)),
+            GetMutAndSet(index, new) =>
+                Box::new((index.clone(), new.clone()).shrink()
+                        .map(|(i, n)| GetMutAndSet(i, n))),
+            After(index, tags) =>
+                Box::new((index.clone(), tags.clone()).shrink()
+                        .map(|(i, ts)| After(i, ts))),
+            AfterMutAndSet(index, tags, new) =>
+                Box::new((index.clone(), tags.clone(), new.clone()).shrink()
+                        .map(|(i, ts, n)| AfterMutAndSet(i, ts, n))),
+            Before(index, tags) =>
+                Box::new((index.clone(), tags.clone()).shrink()
+                        .map(|(i, ts)| Before(i, ts))),
+            BeforeMutAndSet(index, tags, new) =>
+                Box::new((index.clone(), tags.clone(), new.clone()).shrink()
+                        .map(|(i, ts, n)| BeforeMutAndSet(i, ts, n))),
+            Push(tag, value) =>
+                Box::new((tag.clone(), value.clone()).shrink()
+                        .map(|(t, v)| Push(t, v))),
+            Pop => Box::new(iter::empty()),
+            PopAndPush(tag, value, shrink) =>
+                Box::new((tag.clone(), value.clone(), shrink.clone()).shrink()
+                        .map(|(t, v, s)| PopAndPush(t, v, s))),
+        }
+    }
+}
+
+/// Determine if a given sequence of operations have identical results between
+/// the simple specification and the actual queue implementation.
+fn simulates_simple_queue(operations: Vec<Operation<usize>>) -> bool {
+    let mut complex = hopscotch::Queue::new();
+    let mut simple = simple::Queue::new();
+    for operation in operations {
+        if !simulate(operation, &mut simple, &mut complex) {
+            return false;
+        }
+    }
+    true
+}
+
+#[test]
+fn prop_simulates_simple_queue() {
+    QuickCheck::new()
+        .tests(1_000)
+        .quickcheck(simulates_simple_queue as fn(Vec<Operation<usize>>) -> bool)
+}
+
+fn simulate<T: Eq + Clone + Debug>(
     operation: Operation<T>,
-    simple: &mut simple::Queue,
-    complex: &mut hopscotch::Queue,
+    simple: &mut simple::Queue<T>,
+    complex: &mut hopscotch::Queue<T>,
 ) -> bool {
-    match op {
+    use Operation::*;
+    match operation {
         Len => return simple.len() == complex.len(),
         Clear => {
             simple.clear();
@@ -119,39 +201,55 @@ fn simulate<T: Eq>(
         FirstIndex => return simple.first_index() == complex.first_index(),
         ShrinkToFit => {
             simple.shrink_to_fit();
-            complex.shirnk_to_fit();
+            complex.shrink_to_fit();
         },
         ShrinkAllToFit => {
             simple.shrink_all_to_fit();
             complex.shrink_all_to_fit();
         },
-        Get(index) => return simple.get(index) == complex.get(index),
+        Get(index) =>
+            return simple.get(index) == complex.get(index),
+        After(index, tags) =>
+            return simple.after(index, &tags) == complex.after(index, &tags),
+        Before(index, tags) =>
+            return simple.before(index, &tags) == complex.before(index, &tags),
         GetMutAndSet(index, new) => {
             let (simple_ref, complex_ref) =
                 (simple.get_mut(index), complex.get_mut(index));
             if simple_ref != complex_ref {
                 return false;
             }
-            *simple_ref = new;
-            *complex_ref = new;
+            simple_ref.map(|i| *i.value = new.clone());
+            complex_ref.map(|i| *i.value = new);
         },
-        After(index, tags) =>
-            return simple.after(index, tags) == complex.after(index, tags),
         AfterMutAndSet(index, tags, new) => {
             let (simple_ref, complex_ref) =
-                (simple.after_mut(index, taqgs),
-                 complex.after_mut(index, tags));
+                (simple.after_mut(index, &tags),
+                 complex.after_mut(index, &tags));
             if simple_ref != complex_ref {
                 return false;
             }
-            *simple_ref = new;
-            *complex_ref = new;
+            simple_ref.map(|i| *i.value = new.clone());
+            complex_ref.map(|i| *i.value = new);
         },
-        Before(usize, Vec<usize>),
-        BeforeMutAndSet(usize, Vec<usize>, T),
-        Push(T),
-        Pop,
-        PushAndPop(T),
+        BeforeMutAndSet(index, tags, new) => {
+            let (simple_ref, complex_ref) =
+                (simple.before_mut(index, &tags),
+                 complex.before_mut(index, &tags));
+            if simple_ref != complex_ref {
+                return false;
+            }
+            simple_ref.map(|i| *i.value = new.clone());
+            complex_ref.map(|i| *i.value = new);
+        },
+        Push(tag, value) =>
+            return simple.push(tag, value.clone()) == complex.push(tag, value),
+        Pop => return simple.pop() == complex.pop(),
+        PopAndPush(tag, value, shrink) => {
+            let s = simple.push_and_pop(tag, value.clone(), shrink);
+            let c = complex.push_and_pop(tag, value, shrink);
+            return s == c;
+        },
     }
     true
 }
@@ -165,7 +263,8 @@ mod simple {
 
     /// A simple queue which should be behaviorally indistinguishable (but
     /// slower) than a hopscotch queue. Used for testing by bi-simulation.
-    struct Queue<T> {
+    #[derive(Debug, Clone)]
+    pub(super) struct Queue<T> {
         offset: u64,
         inner: VecDeque<(usize, T)>
     }
@@ -221,50 +320,55 @@ mod simple {
         }
 
         pub fn after(&self, mut index: u64, tags: &[usize]) -> Option<Item<&T>> {
+            index = index.max(self.first_index());
             loop {
                 let item = self.get(index)?;
                 if tags.contains(&item.tag) {
                     return Some(item)
                 }
-                index += 1;
+                index = index.checked_add(1)?;
             }
         }
 
         pub fn after_mut(&mut self, mut index: u64, tags: &[usize]) -> Option<Item<&mut T>> {
+            index = index.max(self.first_index());
             loop {
                 let item = self.get(index)?;
                 if tags.contains(&item.tag) {
                     break;
                 }
-                index += 1;
+                index = index.checked_add(1)?;
             }
             self.get_mut(index)
         }
 
         pub fn before(&self, mut index: u64, tags: &[usize]) -> Option<Item<&T>> {
+            index = index.min(self.next_index().saturating_sub(1));
             loop {
                 let item = self.get(index)?;
                 if tags.contains(&item.tag) {
                     return Some(item)
                 }
-                index -= 1;
+                index = index.checked_sub(1)?;
             }
         }
 
         pub fn before_mut(&mut self, mut index: u64, tags: &[usize]) -> Option<Item<&mut T>> {
+            index = index.min(self.next_index().saturating_sub(1));
             loop {
                 let item = self.get(index)?;
                 if tags.contains(&item.tag) {
                     break;
                 }
-                index -= 1;
+                index = index.checked_sub(1)?;
             }
             self.get_mut(index)
         }
 
         pub fn push(&mut self, tag: usize, value: T) -> u64 {
+            let index = self.offset + (self.inner.len() as u64);
             self.inner.push_back((tag, value));
-            self.offset + (self.inner.len() as u64)
+            index
         }
 
         pub fn pop(&mut self) -> Option<Item<T>> {

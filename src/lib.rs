@@ -127,7 +127,7 @@ macro_rules! before_impl {
                         .min_by_key(|(_, dist)| dist.clone())?;
                     let previous_index =
                         this.len()
-                        .checked_sub(previous_distance.saturating_add(1))?;
+                        .checked_sub(previous_distance.checked_add(1)?)?;
                     (previous_tag, previous_index)
                 };
             Some(Item {
@@ -679,7 +679,7 @@ impl<T> Queue<T> {
             // - if !popped.has_tag(k), then *dist > 0 because *dist
             //   should always hold the index of the thing with tag k,
             //   and we know that the thing at index 0 is not with tag k
-            if *dist < queue_len {
+            if *dist <= queue_len {
                 *dist = dist
                     .checked_sub(1)
                     .expect("Zero in wrong place in first_with_tag");
