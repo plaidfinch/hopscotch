@@ -6,7 +6,6 @@ use std::iter::FromIterator;
 pub mod sparse;
 pub use sparse::Sparse;
 
-// TODO: full simulation testing
 // TODO: benchmark
 
 /// A `Queue` is a first-in-first-out (FIFO) queue where each item in the
@@ -33,7 +32,7 @@ pub use sparse::Sparse;
 pub struct Queue<T> {
     offset: u64,
     first_with_tag: Sparse<usize>,
-    latest_with_tag: Sparse<usize>,
+    latest_with_tag: Sparse<usize>, // TODO: remove this, it's unnecessary
     info: VecDeque<Info>,
     values: VecDeque<T>,
 }
