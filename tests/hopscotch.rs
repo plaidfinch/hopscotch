@@ -59,7 +59,7 @@ quickcheck! {
             input.clone().into_iter().collect();
         let queue_iter =
             queue.iter_between(lo.min(hi) as u64, lo.max(hi) as u64, tags)
-            .map(|i| (i.tag, *i.value));
+            .map(|i| (i.tag(), *i.as_ref()));
         let vec_iter = vec_iter_between(&tags, lo, hi, &input);
         compare_double_ended_iters(queue_iter, vec_iter, ordering.into_iter())
     }
@@ -80,7 +80,7 @@ quickcheck! {
             input.clone().into_iter().collect();
         let queue_iter =
             queue.iter_between_mut(lo.min(hi) as u64, lo.max(hi) as u64, tags)
-            .map(|i| (i.tag, *i.value));
+            .map(|mut i| (i.tag(), *i.as_mut()));
         let vec_iter = vec_iter_between(&tags, lo, hi, &input);
         compare_double_ended_iters(queue_iter, vec_iter, ordering.into_iter())
     }
@@ -207,48 +207,58 @@ fn simulate<T: Eq + Clone + Debug>(
             simple.shrink_all_to_fit();
             complex.shrink_all_to_fit();
         },
-        Get(index) =>
-            return simple.get(index) == complex.get(index),
-        After(index, tags) =>
-            return simple.after(index, &tags) == complex.after(index, &tags),
-        Before(index, tags) =>
-            return simple.before(index, &tags) == complex.before(index, &tags),
+        Get(index) => {
+            let s = simple.get(index);
+            let c = complex.get(index);
+            return s == c.map(hopscotch::Item::into);
+        },
+        After(index, tags) => {
+            let s = simple.after(index, &tags);
+            let c = complex.after(index, &tags);
+            return s == c.map(hopscotch::Item::into);
+        },
+        Before(index, tags) => {
+            let s = simple.before(index, &tags);
+            let c = complex.before(index, &tags);
+            return s == c.map(hopscotch::Item::into);
+        },
         GetMutAndSet(index, new) => {
-            let (simple_ref, complex_ref) =
-                (simple.get_mut(index), complex.get_mut(index));
-            if simple_ref != complex_ref {
-                return false;
+            match (simple.get_mut(index), complex.get_mut(index)) {
+                (None, None) => { },
+                (Some(mut s), Some(mut c)) => {
+                    *s.as_mut() = new.clone();
+                    *c.as_mut() = new;
+                },
+                _ => return false,
             }
-            simple_ref.map(|i| *i.value = new.clone());
-            complex_ref.map(|i| *i.value = new);
         },
         AfterMutAndSet(index, tags, new) => {
-            let (simple_ref, complex_ref) =
-                (simple.after_mut(index, &tags),
-                 complex.after_mut(index, &tags));
-            if simple_ref != complex_ref {
-                return false;
+            match (simple.after_mut(index, &tags), complex.after_mut(index, &tags)) {
+                (None, None) => { },
+                (Some(mut s), Some(mut c)) => {
+                    *s.as_mut() = new.clone();
+                    *c.as_mut() = new;
+                },
+                _ => return false,
             }
-            simple_ref.map(|i| *i.value = new.clone());
-            complex_ref.map(|i| *i.value = new);
         },
         BeforeMutAndSet(index, tags, new) => {
-            let (simple_ref, complex_ref) =
-                (simple.before_mut(index, &tags),
-                 complex.before_mut(index, &tags));
-            if simple_ref != complex_ref {
-                return false;
+            match (simple.before_mut(index, &tags), complex.before_mut(index, &tags)) {
+                (None, None) => { },
+                (Some(mut s), Some(mut c)) => {
+                    *s.as_mut() = new.clone();
+                    *c.as_mut() = new;
+                },
+                _ => return false,
             }
-            simple_ref.map(|i| *i.value = new.clone());
-            complex_ref.map(|i| *i.value = new);
         },
         Push(tag, value) =>
             return simple.push(tag, value.clone()) == complex.push(tag, value),
-        Pop => return simple.pop() == complex.pop(),
+        Pop => return simple.pop() == complex.pop().map(hopscotch::Item::into),
         PopAndPush(tag, value, shrink) => {
-            let s = simple.push_and_pop(tag, value.clone(), shrink);
-            let c = complex.push_and_pop(tag, value, shrink);
-            return s == c;
+            let (i, s) = simple.push_and_pop(tag, value.clone(), shrink);
+            let (j, c) = complex.push_and_pop(tag, value, shrink);
+            return (i, s) == (j, c.map(hopscotch::Item::into));
         },
     }
     true
@@ -259,7 +269,7 @@ fn simulate<T: Eq + Clone + Debug>(
 mod simple {
     use std::convert::TryInto;
     use std::collections::VecDeque;
-    use hopscotch::Item;
+    use hopscotch;
 
     /// A simple queue which should be behaviorally indistinguishable (but
     /// slower) than a hopscotch queue. Used for testing by bi-simulation.
@@ -267,6 +277,41 @@ mod simple {
     pub(super) struct Queue<T> {
         offset: u64,
         inner: VecDeque<(usize, T)>
+    }
+
+    #[derive(Debug, Clone, PartialEq, PartialOrd, Eq, Ord, Hash)]
+    pub struct Item<T> {
+        index: u64,
+        tag: usize,
+        value: T,
+    }
+
+    impl<T> Item<T> {
+        pub fn index(&self) -> u64 { self.index }
+        pub fn tag(&self) -> usize { self.tag }
+        pub fn into_value(self) -> T { self.value }
+    }
+
+    impl<T> AsRef<T> for Item<&T> {
+        fn as_ref(&self) -> &T {
+            self.value
+        }
+    }
+
+    impl<T> AsMut<T> for Item<&mut T> {
+        fn as_mut(&mut self) -> &mut T {
+            self.value
+        }
+    }
+
+    impl<T> From<hopscotch::Item<T>> for Item<T> {
+        fn from(item: hopscotch::Item<T>) -> Item<T> {
+            Item {
+                index: item.index(),
+                tag: item.tag(),
+                value: item.into_value()
+            }
+        }
     }
 
     impl<T> Queue<T> {
@@ -323,7 +368,7 @@ mod simple {
             index = index.max(self.first_index());
             loop {
                 let item = self.get(index)?;
-                if tags.contains(&item.tag) {
+                if tags.contains(&item.tag()) {
                     return Some(item)
                 }
                 index = index.checked_add(1)?;
@@ -334,7 +379,7 @@ mod simple {
             index = index.max(self.first_index());
             loop {
                 let item = self.get(index)?;
-                if tags.contains(&item.tag) {
+                if tags.contains(&item.tag()) {
                     break;
                 }
                 index = index.checked_add(1)?;
@@ -346,7 +391,7 @@ mod simple {
             index = index.min(self.next_index().saturating_sub(1));
             loop {
                 let item = self.get(index)?;
-                if tags.contains(&item.tag) {
+                if tags.contains(&item.tag()) {
                     return Some(item)
                 }
                 index = index.checked_sub(1)?;
@@ -357,7 +402,7 @@ mod simple {
             index = index.min(self.next_index().saturating_sub(1));
             loop {
                 let item = self.get(index)?;
-                if tags.contains(&item.tag) {
+                if tags.contains(&item.tag()) {
                     break;
                 }
                 index = index.checked_sub(1)?;

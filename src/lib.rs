@@ -42,14 +42,34 @@ pub struct Queue<T> {
 /// to the borrowing properties of that method.
 #[derive(Debug, Clone, PartialEq, PartialOrd, Eq, Ord, Hash)]
 pub struct Item<T> {
+    index: u64,
+    tag: usize,
+    value: T,
+}
+
+impl<T> Item<T> {
     /// The index of the item: this is unique for the entire lifetime of the
     /// queue from which this item originated.
-    pub index: u64,
+    pub fn index(&self) -> u64 { self.index }
     /// The tag of the item which was originally assigned when the item was
     /// inserted into the queue.
-    pub tag: usize,
-    /// The item itself (or a reference to one, i.e. `&T`, or `&mut T`).
-    pub value: T,
+    pub fn tag(&self) -> usize { self.tag }
+    /// Extract the value itself. If this is an `Item<&T>` or an `Item<&mut T>`
+    /// and you just want a reference to the value without consuming the `Item`,
+    /// use `as_ref()` or `as_mut()`, respectively.
+    pub fn into_value(self) -> T { self.value }
+}
+
+impl<T> AsRef<T> for Item<&T> {
+    fn as_ref(&self) -> &T {
+        self.value
+    }
+}
+
+impl<T> AsMut<T> for Item<&mut T> {
+    fn as_mut(&mut self) -> &mut T {
+        self.value
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -325,7 +345,7 @@ impl<T> Queue<T> {
     /// use hopscotch::Queue;
     ///
     /// let mut queue: Queue<usize> = (0..10).zip(0..10).collect();
-    /// assert_eq!(*queue.get(0).unwrap().value, 0);
+    /// assert_eq!(*queue.get(0).unwrap().as_ref(), 0);
     /// ```
     ///
     /// As noted elsewhere, if we `pop` off this value, the index we
@@ -349,9 +369,9 @@ impl<T> Queue<T> {
     /// ```
     /// # use hopscotch::Queue;
     /// let mut queue: Queue<usize> = (0..10).zip(0..10).collect();
-    /// let mut n = queue.get_mut(0).unwrap().value;
-    /// *n = 5000;
-    /// assert_eq!(*queue.get(0).unwrap().value, 5000);
+    /// let mut n = queue.get_mut(0).unwrap();
+    /// *n.as_mut() = 5000;
+    /// assert_eq!(*queue.get(0).unwrap().as_ref(), 5000);
     /// ```
     ///
     /// As noted elsewhere, if we `pop` off this value, the index we
@@ -397,9 +417,9 @@ impl<T> Queue<T> {
     /// #        (1, "Bonjour".to_string()),
     /// #        (0, "world!".to_string()),
     /// #        (1, "le monde!".to_string())].into_iter().collect();
-    /// assert_eq!(queue.after(0, &[0]).unwrap().value, "Hello");
-    /// assert_eq!(queue.after(0, &[1]).unwrap().value, "Bonjour");
-    /// assert_eq!(queue.after(0, &[0, 1]).unwrap().value, "Hello");
+    /// assert_eq!(queue.after(0, &[0]).unwrap().as_ref(), "Hello");
+    /// assert_eq!(queue.after(0, &[1]).unwrap().as_ref(), "Bonjour");
+    /// assert_eq!(queue.after(0, &[0, 1]).unwrap().as_ref(), "Hello");
     /// ```
     ///
     /// Starting *inclusively after* index 1:
@@ -411,9 +431,9 @@ impl<T> Queue<T> {
     /// #        (1, "Bonjour".to_string()),
     /// #        (0, "world!".to_string()),
     /// #        (1, "le monde!".to_string())].into_iter().collect();
-    /// assert_eq!(queue.after(1, &[0]).unwrap().value, "world!");
-    /// assert_eq!(queue.after(1, &[1]).unwrap().value, "Bonjour");
-    /// assert_eq!(queue.after(1, &[0, 1]).unwrap().value, "Bonjour");
+    /// assert_eq!(queue.after(1, &[0]).unwrap().as_ref(), "world!");
+    /// assert_eq!(queue.after(1, &[1]).unwrap().as_ref(), "Bonjour");
+    /// assert_eq!(queue.after(1, &[0, 1]).unwrap().as_ref(), "Bonjour");
     /// ```
     ///
     /// Starting *inclusively after* index 2:
@@ -425,9 +445,9 @@ impl<T> Queue<T> {
     /// #        (1, "Bonjour".to_string()),
     /// #        (0, "world!".to_string()),
     /// #        (1, "le monde!".to_string())].into_iter().collect();
-    /// assert_eq!(queue.after(2, &[0]).unwrap().value, "world!");
-    /// assert_eq!(queue.after(2, &[1]).unwrap().value, "le monde!");
-    /// assert_eq!(queue.after(2, &[0, 1]).unwrap().value, "world!");
+    /// assert_eq!(queue.after(2, &[0]).unwrap().as_ref(), "world!");
+    /// assert_eq!(queue.after(2, &[1]).unwrap().as_ref(), "le monde!");
+    /// assert_eq!(queue.after(2, &[0, 1]).unwrap().as_ref(), "world!");
     /// ```
     ///
     /// Starting *inclusively after* index 3:
@@ -440,8 +460,8 @@ impl<T> Queue<T> {
     /// #        (0, "world!".to_string()),
     /// #        (1, "le monde!".to_string())].into_iter().collect();
     /// assert!(queue.after(3, &[0]).is_none());
-    /// assert_eq!(queue.after(3, &[1]).unwrap().value, "le monde!");
-    /// assert_eq!(queue.after(3, &[0, 1]).unwrap().value, "le monde!");
+    /// assert_eq!(queue.after(3, &[1]).unwrap().as_ref(), "le monde!");
+    /// assert_eq!(queue.after(3, &[0, 1]).unwrap().as_ref(), "le monde!");
     /// ```
     ///
     /// Starting *inclusively after* index 4:
@@ -483,11 +503,11 @@ impl<T> Queue<T> {
     ///          (1, "le monde!".to_string())].into_iter().collect();
     ///
     /// let beginning = 0; // same start index for both calls to `after_mut`
-    /// *queue.after_mut(beginning, &[0]).unwrap().value = "Goodbye".to_string();
-    /// *queue.after_mut(beginning, &[1]).unwrap().value = "Au revoir".to_string();
+    /// *queue.after_mut(beginning, &[0]).unwrap().as_mut() = "Goodbye".to_string();
+    /// *queue.after_mut(beginning, &[1]).unwrap().as_mut() = "Au revoir".to_string();
     ///
-    /// assert_eq!(queue.get(0).unwrap().value, "Goodbye");
-    /// assert_eq!(queue.get(1).unwrap().value, "Au revoir");
+    /// assert_eq!(queue.get(0).unwrap().as_ref(), "Goodbye");
+    /// assert_eq!(queue.get(1).unwrap().as_ref(), "Au revoir");
     /// ```
     pub fn after_mut(&mut self, index: u64, tags: &[usize]) -> Option<Item<&mut T>> {
         after_impl!(self, index, tags, mut)
@@ -523,9 +543,9 @@ impl<T> Queue<T> {
     /// #        (1, "Bonjour".to_string()),
     /// #        (0, "world!".to_string()),
     /// #        (1, "le monde!".to_string())].into_iter().collect();
-    /// assert_eq!(queue.before(4, &[0]).unwrap().value, "world!");
-    /// assert_eq!(queue.before(4, &[1]).unwrap().value, "le monde!");
-    /// assert_eq!(queue.before(4, &[0, 1]).unwrap().value, "le monde!");
+    /// assert_eq!(queue.before(4, &[0]).unwrap().as_ref(), "world!");
+    /// assert_eq!(queue.before(4, &[1]).unwrap().as_ref(), "le monde!");
+    /// assert_eq!(queue.before(4, &[0, 1]).unwrap().as_ref(), "le monde!");
     /// ```
     ///
     /// Starting *inclusively before* index 3 (the end of the queue), we get
@@ -538,9 +558,9 @@ impl<T> Queue<T> {
     /// #        (1, "Bonjour".to_string()),
     /// #        (0, "world!".to_string()),
     /// #        (1, "le monde!".to_string())].into_iter().collect();
-    /// assert_eq!(queue.before(3, &[0]).unwrap().value, "world!");
-    /// assert_eq!(queue.before(3, &[1]).unwrap().value, "le monde!");
-    /// assert_eq!(queue.before(3, &[0, 1]).unwrap().value, "le monde!");
+    /// assert_eq!(queue.before(3, &[0]).unwrap().as_ref(), "world!");
+    /// assert_eq!(queue.before(3, &[1]).unwrap().as_ref(), "le monde!");
+    /// assert_eq!(queue.before(3, &[0, 1]).unwrap().as_ref(), "le monde!");
     /// ```
     ///
     /// Starting *inclusively before* index 2:
@@ -552,9 +572,9 @@ impl<T> Queue<T> {
     /// #        (1, "Bonjour".to_string()),
     /// #        (0, "world!".to_string()),
     /// #        (1, "le monde!".to_string())].into_iter().collect();
-    /// assert_eq!(queue.before(2, &[0]).unwrap().value, "world!");
-    /// assert_eq!(queue.before(2, &[1]).unwrap().value, "Bonjour");
-    /// assert_eq!(queue.before(2, &[0, 1]).unwrap().value, "world!");
+    /// assert_eq!(queue.before(2, &[0]).unwrap().as_ref(), "world!");
+    /// assert_eq!(queue.before(2, &[1]).unwrap().as_ref(), "Bonjour");
+    /// assert_eq!(queue.before(2, &[0, 1]).unwrap().as_ref(), "world!");
     /// ```
     ///
     /// Starting *inclusively before* index 1:
@@ -566,9 +586,9 @@ impl<T> Queue<T> {
     /// #        (1, "Bonjour".to_string()),
     /// #        (0, "world!".to_string()),
     /// #        (1, "le monde!".to_string())].into_iter().collect();
-    /// assert_eq!(queue.before(1, &[0]).unwrap().value, "Hello");
-    /// assert_eq!(queue.before(1, &[1]).unwrap().value, "Bonjour");
-    /// assert_eq!(queue.before(1, &[0, 1]).unwrap().value, "Bonjour");
+    /// assert_eq!(queue.before(1, &[0]).unwrap().as_ref(), "Hello");
+    /// assert_eq!(queue.before(1, &[1]).unwrap().as_ref(), "Bonjour");
+    /// assert_eq!(queue.before(1, &[0, 1]).unwrap().as_ref(), "Bonjour");
     /// ```
     ///
     /// Starting *inclusively before* index 0:
@@ -580,9 +600,9 @@ impl<T> Queue<T> {
     /// #        (1, "Bonjour".to_string()),
     /// #        (0, "world!".to_string()),
     /// #        (1, "le monde!".to_string())].into_iter().collect();
-    /// assert_eq!(queue.before(0, &[0]).unwrap().value, "Hello");
+    /// assert_eq!(queue.before(0, &[0]).unwrap().as_ref(), "Hello");
     /// assert!(queue.before(0, &[1]).is_none());
-    /// assert_eq!(queue.before(0, &[0, 1]).unwrap().value, "Hello");
+    /// assert_eq!(queue.before(0, &[0, 1]).unwrap().as_ref(), "Hello");
     /// ```
     pub fn before(&self, index: u64, tags: &[usize]) -> Option<Item<&T>> {
         before_impl!(self, index, tags)
@@ -610,11 +630,11 @@ impl<T> Queue<T> {
     ///          (1, "le monde!".to_string())].into_iter().collect();
     ///
     /// let end = 5; // same end index for both calls to `after_mut`
-    /// *queue.before_mut(end, &[0]).unwrap().value = "my friends!".to_string();
-    /// *queue.before_mut(end, &[1]).unwrap().value = "mes amis!".to_string();
+    /// *queue.before_mut(end, &[0]).unwrap().as_mut() = "my friends!".to_string();
+    /// *queue.before_mut(end, &[1]).unwrap().as_mut() = "mes amis!".to_string();
     ///
-    /// assert_eq!(queue.get(2).unwrap().value, "my friends!");
-    /// assert_eq!(queue.get(3).unwrap().value, "mes amis!");
+    /// assert_eq!(queue.get(2).unwrap().as_ref(), "my friends!");
+    /// assert_eq!(queue.get(3).unwrap().as_ref(), "mes amis!");
     /// ```
     pub fn before_mut(&mut self, index: u64, tags: &[usize]) -> Option<Item<&mut T>> {
         before_impl!(self, index, tags, mut)
@@ -631,9 +651,9 @@ impl<T> Queue<T> {
     /// queue.push(42, "Hello!".to_string());
     /// let item = queue.pop().unwrap();
     ///
-    /// assert_eq!(item.index, 0);
-    /// assert_eq!(item.tag, 42);
-    /// assert_eq!(item.value, "Hello!");
+    /// assert_eq!(item.index(), 0);
+    /// assert_eq!(item.tag(), 42);
+    /// assert_eq!(item.into_value(), "Hello!");
     /// ```
     pub fn pop(&mut self) -> Option<Item<T>> {
         Some(self.pop_and_reclaim()?.0)
@@ -726,9 +746,9 @@ impl<T> Queue<T> {
     /// let item = popped.unwrap();
     ///
     /// assert_eq!(new_index, 1);
-    /// assert_eq!(item.index, 0);
-    /// assert_eq!(item.tag, 42);
-    /// assert_eq!(item.value, "Hello!");
+    /// assert_eq!(item.index(), 0);
+    /// assert_eq!(item.tag(), 42);
+    /// assert_eq!(item.into_value(), "Hello!");
     /// ```
     pub fn push_and_pop(&mut self, tag: usize, value: T, shrink: bool) -> (u64, Option<Item<T>>) {
         let result = self.push_and_maybe_pop(tag, value, true);
@@ -854,12 +874,12 @@ impl<T> Queue<T> {
     ///
     /// let english: Vec<&str> =
     ///     queue.iter_between(0, u64::max_value(), Some(&[0]))
-    ///     .map(|i| i.value.as_ref()).collect();
+    ///     .map(|i| i.into_value().as_ref()).collect();
     /// assert_eq!(english, &["Hello", "world!"]);
     ///
     /// let all_backwards: Vec<&str> =
     ///     queue.iter_between(0, u64::max_value(), None).rev() // <-- notice the reversal
-    ///     .map(|i| i.value.as_ref()).collect();
+    ///     .map(|i| i.into_value().as_ref()).collect();
     /// assert_eq!(all_backwards, &["le monde!", "world!", "Bonjour", "Hello"]);
     /// ```
     pub fn iter_between<'a, 'b>(
@@ -892,13 +912,13 @@ impl<T> Queue<T> {
     ///          (0, "world!".to_string()),
     ///          (1, "le monde!".to_string())].into_iter().collect();
     ///
-    /// for item in queue.iter_between_mut(0, u64::max_value(), Some(&[0])) {
-    ///    *item.value = item.value.to_uppercase();
+    /// for mut item in queue.iter_between_mut(0, u64::max_value(), Some(&[0])) {
+    ///    *item.as_mut() = item.as_mut().to_uppercase();
     /// }
     ///
     /// let words: Vec<&str> =
     ///     queue.iter_between(0, u64::max_value(), None)
-    ///     .map(|i| i.value.as_ref()).collect();
+    ///     .map(|i| i.into_value().as_ref()).collect();
     /// assert_eq!(words, &["HELLO", "Bonjour", "WORLD!", "le monde!"]);
     /// ```
     pub fn iter_between_mut<'a, 'b>(
