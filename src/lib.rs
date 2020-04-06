@@ -32,7 +32,6 @@ pub use sparse::Sparse;
 pub struct Queue<T> {
     offset: u64,
     first_with_tag: Sparse<usize>,
-    latest_with_tag: Sparse<usize>, // TODO: remove this, it's unnecessary
     info: VecDeque<Info>,
     values: VecDeque<T>,
 }
@@ -110,28 +109,17 @@ macro_rules! before_impl {
             let index = $index;
             let tags = $tags;
             let this = $self;
-            let index = index.checked_sub(this.offset)?.try_into().ok()?;
-            let (previous_index_tag, previous_index) =
-                if let Some(current) = this.info.get(index) {
-                    let (previous_tag, previous_distance) =
-                    tags.iter().copied()
-                        .filter_map(|tag| Some((tag, *current.previous_with_tag.get(tag)?)))
-                        .min_by_key(|(_, dist)| dist.clone())?;
-                    let previous_index = index.checked_sub(previous_distance)?;
-                    (previous_tag, previous_index)
-                } else {
-                    let (previous_tag, previous_distance) =
-                    tags.iter().copied()
-                        .filter_map(|tag| Some((tag, *this.latest_with_tag.get(tag)?)))
-                        .min_by_key(|(_, dist)| dist.clone())?;
-                    let previous_index =
-                        this.len()
-                        .checked_sub(previous_distance.checked_add(1)?)?;
-                    (previous_tag, previous_index)
-                };
+            let index: usize = index.checked_sub(this.offset)?.try_into().ok()?;
+            let index = index.min(this.len().saturating_sub(1));
+            let current = this.info.get(index)?;
+            let (previous_tag, previous_distance) =
+                tags.iter().copied()
+                .filter_map(|tag| Some((tag, *current.previous_with_tag.get(tag)?)))
+                .min_by_key(|(_, dist)| dist.clone())?;
+            let previous_index = index.checked_sub(previous_distance)?;
             Some(Item {
                 value: get!(this.values, previous_index $(, $mutability)?)?,
-                tag: previous_index_tag,
+                tag: previous_tag,
                 index: (previous_index as u64).checked_add(this.offset)
                     .expect("Queue index overflow")
             })
@@ -234,7 +222,6 @@ impl<T> Queue<T> {
         Queue {
             offset: 0,
             first_with_tag: Sparse::new(),
-            latest_with_tag: Sparse::new(),
             info: VecDeque::with_capacity(capacity),
             values: VecDeque::with_capacity(capacity),
         }
@@ -318,7 +305,6 @@ impl<T> Queue<T> {
     pub fn shrink_to_fit(&mut self) {
         self.info.shrink_to_fit();
         self.values.shrink_to_fit();
-        self.latest_with_tag.shrink_to_fit();
         self.first_with_tag.shrink_to_fit();
     }
 
@@ -687,8 +673,6 @@ impl<T> Queue<T> {
                 false // drop this thing
             }
         });
-        // Remove all latest_with_tag references that extend past the queue
-        self.latest_with_tag.retain(|_, dist| *dist < queue_len);
         // Clear the vec but retain its memory
         popped_info.previous_with_tag.clear();
         // Bump the offset because we just shifted the queue
@@ -840,12 +824,6 @@ impl<T> Queue<T> {
         if self.first_with_tag.get(tag).is_none() {
             self.first_with_tag.entry(tag).insert(self.info.len() - 1);
         }
-        // Make sure latest_with_tag tracks this event
-        for dist in self.latest_with_tag.values_mut() {
-            *dist = dist.saturating_add(1); // everything: 1 more away
-        }
-        self.latest_with_tag.entry(tag).insert(0); // this tag: right here
-                                                   // Calculate the index of the just-inserted thing
         (
             self.offset
                 .checked_add(self.len() as u64)
