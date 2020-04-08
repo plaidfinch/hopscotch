@@ -55,11 +55,11 @@ quickcheck! {
         } else {
             None
         };
-        let queue: hopscotch::Queue<usize> =
+        let queue: hopscotch::Queue<usize, usize> =
             input.clone().into_iter().collect();
         let queue_iter =
             queue.iter_between(lo.min(hi) as u64, lo.max(hi) as u64, tags)
-            .map(|i| (i.tag(), *i.as_ref()));
+            .map(|i| (*i.tag(), *i.as_ref()));
         let vec_iter = vec_iter_between(&tags, lo, hi, &input);
         compare_double_ended_iters(queue_iter, vec_iter, ordering.into_iter())
     }
@@ -76,11 +76,11 @@ quickcheck! {
         } else {
             None
         };
-        let mut queue: hopscotch::Queue<usize> =
+        let mut queue: hopscotch::Queue<usize, usize> =
             input.clone().into_iter().collect();
         let queue_iter =
             queue.iter_between_mut(lo.min(hi) as u64, lo.max(hi) as u64, tags)
-            .map(|mut i| (i.tag(), *i.as_mut()));
+            .map(|mut i| (*i.tag(), *i.as_mut()));
         let vec_iter = vec_iter_between(&tags, lo, hi, &input);
         compare_double_ended_iters(queue_iter, vec_iter, ordering.into_iter())
     }
@@ -173,14 +173,14 @@ fn simulates_simple_queue(operations: Vec<Operation<usize>>) -> bool {
 #[test]
 fn prop_simulates_simple_queue() {
     QuickCheck::new()
-        .tests(10_000)
+        .tests(1_000_000)
         .quickcheck(simulates_simple_queue as fn(Vec<Operation<usize>>) -> bool)
 }
 
 fn simulate<T: Eq + Clone + Debug>(
     operation: Operation<T>,
     simple: &mut simple::Queue<T>,
-    complex: &mut hopscotch::Queue<T>,
+    complex: &mut hopscotch::Queue<usize, T>,
 ) -> bool {
     use Operation::*;
     match operation {
@@ -242,13 +242,14 @@ fn simulate<T: Eq + Clone + Debug>(
         },
         Push(tag, value) =>
             return simple.push(tag, value.clone()) == complex.push(tag, value),
-        Pop => return simple.pop() == complex.pop().map(hopscotch::Item::into),
+        Pop => return simple.pop() == complex.pop().map(hopscotch::Popped::into),
     }
     true
 }
 
 /// A simple reference implementation of the same functionality as a hopscotch
 /// queue, with worse asymptotics.
+#[allow(dead_code)]
 mod simple {
     use std::convert::TryInto;
     use std::collections::VecDeque;
@@ -272,27 +273,47 @@ mod simple {
     impl<T> Item<T> {
         pub fn index(&self) -> u64 { self.index }
         pub fn tag(&self) -> usize { self.tag }
-        pub fn into_value(self) -> T { self.value }
+        pub fn value(self) -> T { self.value }
     }
 
     impl<T> AsRef<T> for Item<&T> {
         fn as_ref(&self) -> &T {
-            self.value
+            &self.value
         }
     }
 
     impl<T> AsMut<T> for Item<&mut T> {
         fn as_mut(&mut self) -> &mut T {
-            self.value
+            &mut self.value
         }
     }
 
-    impl<T> From<hopscotch::Item<T>> for Item<T> {
-        fn from(item: hopscotch::Item<T>) -> Item<T> {
+    impl<'a, T> From<hopscotch::Item<'a, usize, T>> for Item<&'a T> {
+        fn from(item: hopscotch::Item<'a, usize, T>) -> Item<&'a T> {
             Item {
                 index: item.index(),
-                tag: item.tag(),
-                value: item.into_value()
+                tag: *item.tag(),
+                value: item.value(),
+            }
+        }
+    }
+
+    impl<'a, T> From<hopscotch::ItemMut<'a, usize, T>> for Item<&'a mut T> {
+        fn from(item: hopscotch::ItemMut<'a, usize, T>) -> Item<&'a mut T> {
+            Item {
+                index: item.index(),
+                tag: *item.tag(),
+                value: item.into_mut(),
+            }
+        }
+    }
+
+    impl<T> From<hopscotch::Popped<usize, T>> for Item<T> {
+        fn from(item: hopscotch::Popped<usize, T>) -> Item<T> {
+            Item {
+                index: item.index,
+                tag: item.tag,
+                value: item.value,
             }
         }
     }

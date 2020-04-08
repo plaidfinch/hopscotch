@@ -11,7 +11,7 @@ fn random_tags(width: usize) -> impl Iterator<Item = usize> {
     std::iter::repeat_with(move || rng.gen_range(0, width + 1))
 }
 
-fn unit_queue_from_tags(tags: impl IntoIterator<Item = usize>) -> Queue<()> {
+fn unit_queue_from_tags(tags: impl IntoIterator<Item = usize>) -> Queue<usize, ()> {
     let tags = tags.into_iter();
     let mut queue = Queue::with_capacity(tags.size_hint().0);
     for tag in tags {

@@ -1,13 +1,12 @@
-use std::cmp::Ordering;
 use std::collections::VecDeque;
 use std::convert::TryInto;
 use std::iter::FromIterator;
 
-use im::hashmap::{HashMap, Entry};
+use im::ordmap::OrdMap;
 
-/// A `Queue` is a first-in-first-out (FIFO) queue where each item in the
-/// queue is additionally associated with an immutable *tag* of type `usize` and
-/// a uniquely assigned sequential *index* of type `u64`. Unlike in a queue like
+/// A `Queue` is a first-in-first-out (FIFO) queue where each item in the queue
+/// is additionally associated with an immutable *tag* of type `K` and a
+/// uniquely assigned sequential *index* of type `u64`. Unlike in a queue like
 /// `VecDeque`, queue operations *do not* change the `index` of items; the index
 /// is fixed from the time of the item's insertion to its removal, and each new
 /// inserted item is given an index one greater than that inserted before it.
@@ -20,66 +19,91 @@ use im::hashmap::{HashMap, Entry};
 /// relative to the total number of distinct tags in the queue, and constant
 /// time relative to the size of the queue and the distance between successive
 /// items of the same tag.
-///
-/// This data structure performs best and uses the least memory when the set of
-/// tags is small and mostly unchanging across the lifetime of the queue. A
-/// given queue may use memory proportionate to the product of its length and
-/// the number of distinct tags within it.
 #[derive(Debug, Clone)]
-pub struct Queue<T> {
+pub struct Queue<K: Ord + Clone, T> {
     offset: u64,
-    first_with_tag: HashMap<usize, u64>,
-    info: VecDeque<Info>,
+    first_with_tag: OrdMap<K, u64>,
+    info: VecDeque<Info<K>>,
     values: VecDeque<T>,
 }
 
-/// An item from the queue, either one that is currently in it, or one that has
-/// been removed, e.g. by `pop()`. For a queue of values of type `T`, different
-/// methods will return `Item<T>`, `Item<&T>` and `Item<&mut T>`, as appropriate
-/// to the borrowing properties of that method.
+/// An immutable reference to an item currently in the queue.
 #[derive(Debug, Clone, PartialEq, PartialOrd, Eq, Ord, Hash)]
-pub struct Item<T> {
+pub struct Item<'a, K, T> {
     index: u64,
-    tag: usize,
-    value: T,
+    tag: &'a K,
+    value: &'a T,
 }
 
-impl<T> Item<T> {
+/// A mutable reference to an item currently in the queue.
+#[derive(Debug, PartialEq, PartialOrd, Eq, Ord, Hash)]
+pub struct ItemMut<'a, K, T> {
+    index: u64,
+    tag: &'a K,
+    value: &'a mut T,
+}
+
+/// An item that has been popped from the queue.
+#[derive(Debug, Clone, PartialEq, PartialOrd, Eq, Ord, Hash)]
+pub struct Popped<K, T> {
+    /// The index of the item: this is unique for the entire lifetime of the
+    /// queue from which this item originated.
+    pub index: u64,
+    /// The tag of the item which was originally assigned when the item was
+    /// inserted into the queue.
+    pub tag: K,
+    /// Get a mutable reference to the value contained in this item.
+    pub value: T,
+}
+
+impl<'a, K, T> Item<'a, K, T> {
     /// The index of the item: this is unique for the entire lifetime of the
     /// queue from which this item originated.
     pub fn index(&self) -> u64 { self.index }
     /// The tag of the item which was originally assigned when the item was
     /// inserted into the queue.
-    pub fn tag(&self) -> usize { self.tag }
-    /// Extract the value itself. If this is an `Item<&T>` or an `Item<&mut T>`
-    /// and you just want a reference to the value without consuming the `Item`,
-    /// use `as_ref()` or `as_mut()`, respectively.
-    pub fn into_value(self) -> T { self.value }
+    pub fn tag(&self) -> &K { self.tag }
+    /// Get an immutable reference to the value contained in this item.
+    pub fn value(&self) -> &'a T { self.value }
 }
 
-impl<T> AsRef<T> for Item<&T> {
+impl<'a, K: Ord + Clone, T> ItemMut<'a, K, T> {
+    /// The index of the item: this is unique for the entire lifetime of the
+    /// queue from which this item originated.
+    pub fn index(&self) -> u64 { self.index }
+    /// The tag of the item which was originally assigned when the item was
+    /// inserted into the queue.
+    pub fn tag(&self) -> &K { self.tag }
+    /// Get a mutable reference to the value contained in this item.
+    pub fn value_mut(&mut self) -> &mut T { self.value }
+    /// Extract a mutable reference to the value whose lifetime is tied to
+    /// the entire queue, not this `Item`.
+    pub fn into_mut(self) -> &'a mut T { self.value }
+}
+
+impl<K: Ord + Clone, T> AsRef<T> for Item<'_, K, T> {
     fn as_ref(&self) -> &T {
         self.value
     }
 }
 
-impl<T> AsMut<T> for Item<&mut T> {
+impl<K: Ord + Clone, T> AsRef<T> for ItemMut<'_, K, T> {
+    fn as_ref(&self) -> &T {
+        &*self.value
+    }
+}
+
+impl<K: Ord + Clone, T> AsMut<T> for ItemMut<'_, K, T> {
     fn as_mut(&mut self) -> &mut T {
         self.value
     }
 }
 
 #[derive(Debug, Clone)]
-struct Info {
-    tag: usize,
+struct Info<K: Ord> {
+    tag: K,
     next_with_tag: usize,
-    previous_with_tag: HashMap<usize, u64>,
-}
-
-impl Info {
-    fn has_tag(&self, tag: usize) -> bool {
-        self.tag == tag
-    }
+    previous_with_tag: OrdMap<K, u64>,
 }
 
 /// Either e.get(i), or e.get_mut(i), depending on whether a third argument is
@@ -106,11 +130,7 @@ macro_rules! get_impl {
                 get!(this.info,
                      internal_index
                      $(, $mutability)?)?;
-            Some(Item {
-                value: & $($mutability)? this.values[internal_index],
-                tag: *tag,
-                index
-            })
+            Some((& $($mutability)? this.values[internal_index], tag, index))
         }
     }
 }
@@ -128,15 +148,14 @@ macro_rules! before_impl {
 
             let index: usize = this.as_internal_index(index)?;
             let current = this.info.get(index)?;
-            let (previous_tag, previous_index) =
+            let previous_index =
                 tags.iter()
-                .filter_map(|tag| Some((tag, *current.previous_with_tag.get(tag)?)))
-                .max_by_key(|(_, i)| i.clone())?;
-            Some(Item {
-                value: get!(this.values, this.as_internal_index(previous_index)? $(, $mutability)?)?,
-                tag: *previous_tag,
-                index: previous_index,
-            })
+                .filter_map(|tag| Some(*current.previous_with_tag.get(tag)?))
+                .max()?;
+            let internal_index = this.as_internal_index(previous_index)?;
+            Some((get!(this.values, internal_index $(, $mutability)?)?,
+                  &this.info[internal_index].tag,
+                  previous_index))
         }
     };
 }
@@ -157,11 +176,11 @@ macro_rules! after_impl {
             let here_index = index.max(this.first_index());
             let here = this.info(here_index);
 
-            let mut minimum: Option<(usize, u64)> = None;
+            let mut minimum: Option<u64> = None;
             if let Some(here_info) = here {
                 for tag in tags {
                     if *tag == here_info.tag {
-                        minimum = Some((*tag, here_index));
+                        minimum = Some(here_index);
                         break;
                     }
                     let next_index =
@@ -174,39 +193,33 @@ macro_rules! after_impl {
                         } else {
                             this.first_with_tag.get(&tag).copied()
                         };
-                    dbg!(next_index);
                     minimum = match (minimum, next_index) {
                         (None, Some(next_index))
                             if this.first_index() <= next_index => {
-                                Some((*tag, next_index))
+                                Some(next_index)
                             },
-                        (Some((_, min)), Some(next_index))
+                        (Some(min), Some(next_index))
                             if this.first_index() <= next_index && next_index < min => {
-                                Some((*tag, next_index))
+                                Some(next_index)
                             },
                         _ => minimum,
                     }
                 }
             } else {
-                minimum = this
-                    .first_with_tag
-                    .iter()
-                    .copied()
-                    .min_by_key(|(_, i)| i.clone());
+                minimum = this.first_with_tag.values().min().copied()
             }
             // Get the item at the minimum index and return its exterior-facing
             // index and a reference to the item itself.
-            let (next_tag, next_index) = minimum?;
-            Some(Item {
-                value: get!(this.values, this.as_internal_index(next_index)? $(, $mutability)?)?,
-                tag: next_tag,
-                index: next_index,
-            })
+            let next_index = minimum?;
+            let internal_index = this.as_internal_index(next_index)?;
+            Some((get!(this.values, internal_index $(, $mutability)?)?,
+                  &this.info[internal_index].tag,
+                  next_index))
         }
     };
 }
 
-impl<T> Queue<T> {
+impl<K: Ord + Clone, T> Queue<K, T> {
     /// Given an external persistent index, get the current index within the
     /// internal queue that corresponds to it. This correspondence is
     /// invalidated by future changes to the queue.
@@ -214,18 +227,11 @@ impl<T> Queue<T> {
         index.checked_sub(self.offset)?.try_into().ok()
     }
 
-    /// Given an internal index in the contained queue, get the persistent index
-    /// in the public interface which corresponds to it. This correspondence is
-    /// invalidated by future changes to the queue.
-    fn as_external_index(&self, index: usize) -> Option<u64> {
-        self.offset.checked_add(index as u64)
-    }
-
-    fn info(&self, index: u64) -> Option<&Info> {
+    fn info(&self, index: u64) -> Option<&Info<K>> {
         self.info.get(self.as_internal_index(index)?)
     }
 
-    fn info_mut(&mut self, index: u64) -> Option<&mut Info> {
+    fn info_mut(&mut self, index: u64) -> Option<&mut Info<K>> {
         self.info.get_mut(self.as_internal_index(index)?)
     }
 
@@ -236,9 +242,9 @@ impl<T> Queue<T> {
     /// ```
     /// use hopscotch::Queue;
     ///
-    /// let mut queue: Queue<usize> = Queue::new();
+    /// let mut queue: Queue<usize, usize> = Queue::new();
     /// ```
-    pub fn new() -> Queue<T> {
+    pub fn new() -> Queue<K, T> {
         Self::with_capacity(0)
     }
 
@@ -249,12 +255,12 @@ impl<T> Queue<T> {
     /// ```
     /// use hopscotch::Queue;
     ///
-    /// let mut queue: Queue<usize> = Queue::with_capacity(10);
+    /// let mut queue: Queue<usize, usize> = Queue::with_capacity(10);
     /// ```
-    pub fn with_capacity(capacity: usize) -> Queue<T> {
+    pub fn with_capacity(capacity: usize) -> Queue<K, T> {
         Queue {
             offset: 0,
-            first_with_tag: HashMap::new(),
+            first_with_tag: OrdMap::new(),
             info: VecDeque::with_capacity(capacity),
             values: VecDeque::with_capacity(capacity),
         }
@@ -267,7 +273,7 @@ impl<T> Queue<T> {
     /// ```
     /// use hopscotch::Queue;
     ///
-    /// let mut queue: Queue<usize> = (0..4).zip(0..4).collect();
+    /// let mut queue: Queue<usize, usize> = (0..4).zip(0..4).collect();
     /// assert_eq!(queue.len(), 4);
     /// ```
     pub fn len(&self) -> usize {
@@ -282,7 +288,7 @@ impl<T> Queue<T> {
     /// ```
     /// use hopscotch::Queue;
     ///
-    /// let mut queue: Queue<usize> = Queue::new();
+    /// let mut queue: Queue<usize, usize> = Queue::new();
     /// assert_eq!(queue.next_index(), 0);
     /// let i = queue.push(0, 100);
     /// assert_eq!(i, 0);
@@ -302,7 +308,7 @@ impl<T> Queue<T> {
     /// ```
     /// use hopscotch::Queue;
     ///
-    /// let mut queue: Queue<usize> = (0..10).zip(0..10).collect();
+    /// let mut queue: Queue<usize, usize> = (0..10).zip(0..10).collect();
     /// queue.pop();
     /// queue.pop();
     /// assert_eq!(queue.first_index(), 2);
@@ -320,7 +326,7 @@ impl<T> Queue<T> {
     /// ```
     /// use hopscotch::Queue;
     ///
-    /// let mut queue: Queue<usize> = (0..10).zip(0..10).collect();
+    /// let mut queue: Queue<usize, usize> = (0..10).zip(0..10).collect();
     /// queue.clear();
     /// assert_eq!(queue.len(), 0);
     /// ```
@@ -347,7 +353,7 @@ impl<T> Queue<T> {
     /// ```
     /// use hopscotch::Queue;
     ///
-    /// let mut queue: Queue<usize> = (0..10).zip(0..10).collect();
+    /// let mut queue: Queue<usize, usize> = (0..10).zip(0..10).collect();
     /// assert_eq!(*queue.get(0).unwrap().as_ref(), 0);
     /// ```
     ///
@@ -357,12 +363,13 @@ impl<T> Queue<T> {
     ///
     /// ```
     /// # use hopscotch::Queue;
-    /// # let mut queue: Queue<usize> = (0..10).zip(0..10).collect();
+    /// # let mut queue: Queue<usize, usize> = (0..10).zip(0..10).collect();
     /// queue.pop();
     /// assert!(queue.get(0).is_none());
     /// ```
-    pub fn get(&self, index: u64) -> Option<Item<&T>> {
-        get_impl!(self, index)
+    pub fn get(&self, index: u64) -> Option<Item<K, T>> {
+        let (value, tag, index) = get_impl!(self, index)?;
+        Some(Item{value, tag, index})
     }
 
     /// Get a mutable reference to the first item *exactly at* `index`.
@@ -371,7 +378,7 @@ impl<T> Queue<T> {
     ///
     /// ```
     /// # use hopscotch::Queue;
-    /// let mut queue: Queue<usize> = (0..10).zip(0..10).collect();
+    /// let mut queue: Queue<usize, usize> = (0..10).zip(0..10).collect();
     /// let mut n = queue.get_mut(0).unwrap();
     /// *n.as_mut() = 5000;
     /// assert_eq!(*queue.get(0).unwrap().as_ref(), 5000);
@@ -383,12 +390,13 @@ impl<T> Queue<T> {
     ///
     /// ```
     /// # use hopscotch::Queue;
-    /// # let mut queue: Queue<usize> = (0..10).zip(0..10).collect();
+    /// # let mut queue: Queue<usize, usize> = (0..10).zip(0..10).collect();
     /// queue.pop();
     /// assert!(queue.get(0).is_none());
     /// ```
-    pub fn get_mut(&mut self, index: u64) -> Option<Item<&mut T>> {
-        get_impl!(self, index, mut)
+    pub fn get_mut(&mut self, index: u64) -> Option<ItemMut<K, T>> {
+        let (value, tag, index) = get_impl!(self, index, mut)?;
+        Some(ItemMut{value, tag, index})
     }
 
     /// Get a reference to the first item after or including `index` whose tag
@@ -402,7 +410,7 @@ impl<T> Queue<T> {
     ///
     /// ```
     /// # use hopscotch::Queue;
-    /// let mut queue: Queue<String> =
+    /// let mut queue: Queue<usize, String> =
     ///     vec![(0, "Hello".to_string()),
     ///          (1, "Bonjour".to_string()),
     ///          (0, "world!".to_string()),
@@ -415,7 +423,7 @@ impl<T> Queue<T> {
     ///
     /// ```
     /// # use hopscotch::Queue;
-    /// # let mut queue: Queue<String> =
+    /// # let mut queue: Queue<usize, String> =
     /// #   vec![(0, "Hello".to_string()),
     /// #        (1, "Bonjour".to_string()),
     /// #        (0, "world!".to_string()),
@@ -429,7 +437,7 @@ impl<T> Queue<T> {
     ///
     /// ```
     /// # use hopscotch::Queue;
-    /// # let mut queue: Queue<String> =
+    /// # let mut queue: Queue<usize, String> =
     /// #   vec![(0, "Hello".to_string()),
     /// #        (1, "Bonjour".to_string()),
     /// #        (0, "world!".to_string()),
@@ -443,7 +451,7 @@ impl<T> Queue<T> {
     ///
     /// ```
     /// # use hopscotch::Queue;
-    /// # let mut queue: Queue<String> =
+    /// # let mut queue: Queue<usize, String> =
     /// #   vec![(0, "Hello".to_string()),
     /// #        (1, "Bonjour".to_string()),
     /// #        (0, "world!".to_string()),
@@ -457,7 +465,7 @@ impl<T> Queue<T> {
     ///
     /// ```
     /// # use hopscotch::Queue;
-    /// # let mut queue: Queue<String> =
+    /// # let mut queue: Queue<usize, String> =
     /// #   vec![(0, "Hello".to_string()),
     /// #        (1, "Bonjour".to_string()),
     /// #        (0, "world!".to_string()),
@@ -471,7 +479,7 @@ impl<T> Queue<T> {
     ///
     /// ```
     /// # use hopscotch::Queue;
-    /// # let mut queue: Queue<String> =
+    /// # let mut queue: Queue<usize, String> =
     /// #   vec![(0, "Hello".to_string()),
     /// #        (1, "Bonjour".to_string()),
     /// #        (0, "world!".to_string()),
@@ -480,8 +488,9 @@ impl<T> Queue<T> {
     /// assert!(queue.after(4, &[1]).is_none());
     /// assert!(queue.after(4, &[0, 1]).is_none());
     /// ```
-    pub fn after(&self, index: u64, tags: &[usize]) -> Option<Item<&T>> {
-        after_impl!(self, index, tags)
+    pub fn after(&self, index: u64, tags: &[K]) -> Option<Item<K, T>> {
+        let (value, tag, index) = after_impl!(self, index, tags)?;
+        Some(Item{value, tag, index})
     }
 
     /// Get a mutable reference to the first item after or including `index`
@@ -499,7 +508,7 @@ impl<T> Queue<T> {
     /// ```
     /// use hopscotch::Queue;
     ///
-    /// let mut queue: Queue<String> =
+    /// let mut queue: Queue<usize, String> =
     ///     vec![(0, "Hello".to_string()),
     ///          (1, "Bonjour".to_string()),
     ///          (0, "world!".to_string()),
@@ -512,8 +521,9 @@ impl<T> Queue<T> {
     /// assert_eq!(queue.get(0).unwrap().as_ref(), "Goodbye");
     /// assert_eq!(queue.get(1).unwrap().as_ref(), "Au revoir");
     /// ```
-    pub fn after_mut(&mut self, index: u64, tags: &[usize]) -> Option<Item<&mut T>> {
-        after_impl!(self, index, tags, mut)
+    pub fn after_mut(&mut self, index: u64, tags: &[K]) -> Option<ItemMut<K, T>> {
+        let (value, tag, index) = after_impl!(self, index, tags, mut)?;
+        Some(ItemMut{value, tag, index})
     }
 
     /// Get a reference to the latest item before or including `index` whose tag
@@ -528,7 +538,7 @@ impl<T> Queue<T> {
     /// ```
     /// use hopscotch::Queue;
     ///
-    /// let mut queue: Queue<String> =
+    /// let mut queue: Queue<usize, String> =
     ///     vec![(0, "Hello".to_string()),
     ///          (1, "Bonjour".to_string()),
     ///          (0, "world!".to_string()),
@@ -541,7 +551,7 @@ impl<T> Queue<T> {
     ///
     /// ```
     /// # use hopscotch::Queue;
-    /// # let mut queue: Queue<String> =
+    /// # let mut queue: Queue<usize, String> =
     /// #   vec![(0, "Hello".to_string()),
     /// #        (1, "Bonjour".to_string()),
     /// #        (0, "world!".to_string()),
@@ -556,7 +566,7 @@ impl<T> Queue<T> {
     ///
     /// ```
     /// # use hopscotch::Queue;
-    /// # let mut queue: Queue<String> =
+    /// # let mut queue: Queue<usize, String> =
     /// #   vec![(0, "Hello".to_string()),
     /// #        (1, "Bonjour".to_string()),
     /// #        (0, "world!".to_string()),
@@ -570,7 +580,7 @@ impl<T> Queue<T> {
     ///
     /// ```
     /// # use hopscotch::Queue;
-    /// # let mut queue: Queue<String> =
+    /// # let mut queue: Queue<usize, String> =
     /// #   vec![(0, "Hello".to_string()),
     /// #        (1, "Bonjour".to_string()),
     /// #        (0, "world!".to_string()),
@@ -584,7 +594,7 @@ impl<T> Queue<T> {
     ///
     /// ```
     /// # use hopscotch::Queue;
-    /// # let mut queue: Queue<String> =
+    /// # let mut queue: Queue<usize, String> =
     /// #   vec![(0, "Hello".to_string()),
     /// #        (1, "Bonjour".to_string()),
     /// #        (0, "world!".to_string()),
@@ -598,7 +608,7 @@ impl<T> Queue<T> {
     ///
     /// ```
     /// # use hopscotch::Queue;
-    /// # let mut queue: Queue<String> =
+    /// # let mut queue: Queue<usize, String> =
     /// #   vec![(0, "Hello".to_string()),
     /// #        (1, "Bonjour".to_string()),
     /// #        (0, "world!".to_string()),
@@ -607,8 +617,9 @@ impl<T> Queue<T> {
     /// assert!(queue.before(0, &[1]).is_none());
     /// assert_eq!(queue.before(0, &[0, 1]).unwrap().as_ref(), "Hello");
     /// ```
-    pub fn before(&self, index: u64, tags: &[usize]) -> Option<Item<&T>> {
-        before_impl!(self, index, tags)
+    pub fn before(&self, index: u64, tags: &[K]) -> Option<Item<K, T>> {
+        let (value, tag, index) = before_impl!(self, index, tags)?;
+        Some(Item{value, tag, index})
     }
 
     /// Get a mutable reference to the latest item before or including `index`
@@ -626,7 +637,7 @@ impl<T> Queue<T> {
     /// ```
     /// use hopscotch::Queue;
     ///
-    /// let mut queue: Queue<String> =
+    /// let mut queue: Queue<usize, String> =
     ///     vec![(0, "Hello".to_string()),
     ///          (1, "Bonjour".to_string()),
     ///          (0, "world!".to_string()),
@@ -639,8 +650,9 @@ impl<T> Queue<T> {
     /// assert_eq!(queue.get(2).unwrap().as_ref(), "my friends!");
     /// assert_eq!(queue.get(3).unwrap().as_ref(), "mes amis!");
     /// ```
-    pub fn before_mut(&mut self, index: u64, tags: &[usize]) -> Option<Item<&mut T>> {
-        before_impl!(self, index, tags, mut)
+    pub fn before_mut(&mut self, index: u64, tags: &[K]) -> Option<ItemMut<K, T>> {
+        let (value, tag, index) = before_impl!(self, index, tags, mut)?;
+        Some(ItemMut{value, tag, index})
     }
 
     /// Pop an item off the back of the queue and return it.
@@ -650,15 +662,15 @@ impl<T> Queue<T> {
     /// ```
     /// use hopscotch::Queue;
     ///
-    /// let mut queue: Queue<String> = Queue::new();
+    /// let mut queue: Queue<usize, String> = Queue::new();
     /// queue.push(42, "Hello!".to_string());
     /// let item = queue.pop().unwrap();
     ///
-    /// assert_eq!(item.index(), 0);
-    /// assert_eq!(item.tag(), 42);
-    /// assert_eq!(item.into_value(), "Hello!");
+    /// assert_eq!(item.index, 0);
+    /// assert_eq!(item.tag, 42);
+    /// assert_eq!(item.value, "Hello!");
     /// ```
-    pub fn pop(&mut self) -> Option<Item<T>> {
+    pub fn pop(&mut self) -> Option<Popped<K, T>> {
         // The index of the thing that's about to get popped is equal to
         // the current offset, because the offset is incremented exactly
         // every time something is popped:
@@ -673,23 +685,20 @@ impl<T> Queue<T> {
             popped_index.checked_add(popped_info.next_with_tag as u64);
         let next_index = self.next_index();
         if let Some(next_index_with_tag) = popped_next_with_tag {
-            match self.first_with_tag.entry(popped_info.tag) {
-                Entry::Occupied(mut entry) => {
-                    if next_index_with_tag >= next_index {
-                        entry.remove_entry();
-                    } else {
-                        *entry.get_mut() = next_index_with_tag;
-                    }
-                },
-                Entry::Vacant(_) => {
-                    panic!("Queue invariant violation: popped tag not in first_with_tag")
-                },
+            if next_index_with_tag >= next_index {
+                self.first_with_tag.remove(&popped_info.tag)
+                    .expect("Queue invariant violation: no first_with_tag for extant tag");
+            } else {
+                let first_index =
+                    self.first_with_tag.get_mut(&popped_info.tag)
+                    .expect("Queue invariant violation: no first_with_tag for extant tag");
+                *first_index = next_index_with_tag;
             }
         }
         // Bump the offset because we just shifted the queue
         self.offset = self.offset.checked_add(1).expect("Queue index overflow");
         // Return the pieces
-        Some(Item {
+        Some(Popped {
             value: popped_value,
             tag: popped_info.tag,
             index: popped_index,
@@ -703,16 +712,16 @@ impl<T> Queue<T> {
     /// ```
     /// use hopscotch::Queue;
     ///
-    /// let mut queue: Queue<String> = Queue::new();
+    /// let mut queue: Queue<usize, String> = Queue::new();
     /// queue.push(0, "Hello!".to_string());
     /// ```
-    pub fn push(&mut self, tag: usize, value: T) -> u64 {
+    pub fn push(&mut self, tag: K, value: T) -> u64 {
         // The index we're about to push
         let pushed_index = self.next_index();
         let mut previous_with_tag =
             self.info.back()
             .map(|latest| latest.previous_with_tag.clone())
-            .unwrap_or_else(HashMap::new);
+            .unwrap_or_else(OrdMap::new);
         // Set the next_with_tag index of the previous of this tag to point to
         // the index we're about to insert at.
         previous_with_tag.get(&tag)
@@ -725,9 +734,9 @@ impl<T> Queue<T> {
                 });
             });
         // Actually insert the item into the queue
-        previous_with_tag.insert(tag, pushed_index);
+        previous_with_tag.insert(tag.clone(), pushed_index);
         self.info.push_back(Info {
-            tag,
+            tag: tag.clone(),
             previous_with_tag,
             next_with_tag: usize::max_value(),
         });
@@ -752,7 +761,7 @@ impl<T> Queue<T> {
     /// ```
     /// use hopscotch::Queue;
     ///
-    /// let mut queue: Queue<String> =
+    /// let mut queue: Queue<usize, String> =
     ///     vec![(0, "Hello".to_string()),
     ///          (1, "Bonjour".to_string()),
     ///          (0, "world!".to_string()),
@@ -760,20 +769,20 @@ impl<T> Queue<T> {
     ///
     /// let english: Vec<&str> =
     ///     queue.iter_between(0, u64::max_value(), Some(&[0]))
-    ///     .map(|i| i.into_value().as_ref()).collect();
+    ///     .map(|i| i.value().as_ref()).collect();
     /// assert_eq!(english, &["Hello", "world!"]);
     ///
     /// let all_backwards: Vec<&str> =
     ///     queue.iter_between(0, u64::max_value(), None).rev() // <-- notice the reversal
-    ///     .map(|i| i.into_value().as_ref()).collect();
+    ///     .map(|i| i.value().as_ref()).collect();
     /// assert_eq!(all_backwards, &["le monde!", "world!", "Bonjour", "Hello"]);
     /// ```
     pub fn iter_between<'a, 'b>(
         &'a self,
         earliest: u64,
         latest: u64,
-        tags: Option<&'b [usize]>,
-    ) -> Iter<'a, 'b, T> {
+        tags: Option<&'b [K]>,
+    ) -> Iter<'a, 'b, K, T> {
         let head = Some(self.next_index().saturating_sub(1).min(latest));
         let tail = Some(self.first_index().max(earliest));
         Iter{inner: self, tags, head, tail}
@@ -792,7 +801,7 @@ impl<T> Queue<T> {
     /// ```
     /// use hopscotch::Queue;
     ///
-    /// let mut queue: Queue<String> =
+    /// let mut queue: Queue<usize, String> =
     ///     vec![(0, "Hello".to_string()),
     ///          (1, "Bonjour".to_string()),
     ///          (0, "world!".to_string()),
@@ -804,25 +813,25 @@ impl<T> Queue<T> {
     ///
     /// let words: Vec<&str> =
     ///     queue.iter_between(0, u64::max_value(), None)
-    ///     .map(|i| i.into_value().as_ref()).collect();
+    ///     .map(|i| i.value().as_ref()).collect();
     /// assert_eq!(words, &["HELLO", "Bonjour", "WORLD!", "le monde!"]);
     /// ```
     pub fn iter_between_mut<'a, 'b>(
         &'a mut self,
         earliest: u64,
         latest: u64,
-        tags: Option<&'b [usize]>,
-    ) -> IterMut<'a, 'b, T> {
+        tags: Option<&'b [K]>,
+    ) -> IterMut<'a, 'b, K, T> {
         let head = Some(self.next_index().saturating_sub(1).min(latest));
         let tail = Some(self.first_index().max(earliest));
         IterMut{inner: self, tags, head, tail}
     }
 }
 
-impl<T> FromIterator<(usize, T)> for Queue<T> {
+impl<K: Ord + Clone, T> FromIterator<(K, T)> for Queue<K, T> {
     fn from_iter<I>(iter: I) -> Self
     where
-        I: IntoIterator<Item = (usize, T)>,
+        I: IntoIterator<Item = (K, T)>,
     {
         let iter = iter.into_iter();
         let mut queue = Queue::with_capacity(iter.size_hint().0);
@@ -833,8 +842,8 @@ impl<T> FromIterator<(usize, T)> for Queue<T> {
     }
 }
 
-impl<T> Extend<(usize, T)> for Queue<T> {
-    fn extend<I>(&mut self, iter: I) where I: IntoIterator<Item = (usize, T)> {
+impl<K: Ord + Clone, T> Extend<(K, T)> for Queue<K, T> {
+    fn extend<I>(&mut self, iter: I) where I: IntoIterator<Item = (K, T)> {
         for (tag, item) in iter {
             self.push(tag, item);
         }
@@ -842,15 +851,15 @@ impl<T> Extend<(usize, T)> for Queue<T> {
 }
 
 /// An iterator over immutable references to items in a queue.
-pub struct Iter<'a, 'b, T> {
-    inner: &'a Queue<T>,
-    tags: Option<&'b [usize]>,
+pub struct Iter<'a, 'b, K: Ord + Clone, T> {
+    inner: &'a Queue<K, T>,
+    tags: Option<&'b [K]>,
     head: Option<u64>,
     tail: Option<u64>,
 }
 
-impl<'a, 'b, T> Iterator for Iter<'a, 'b, T> {
-    type Item = Item<&'a T>;
+impl<'a, 'b, K: Ord + Clone, T> Iterator for Iter<'a, 'b, K, T> {
+    type Item = Item<'a, K, T>;
 
     fn next(&mut self) -> Option<Self::Item> {
         if self.tail? > self.head? {
@@ -869,7 +878,7 @@ impl<'a, 'b, T> Iterator for Iter<'a, 'b, T> {
     }
 }
 
-impl<'a, 'b, T> DoubleEndedIterator for Iter<'a, 'b, T> {
+impl<'a, 'b, K: Ord + Clone, T> DoubleEndedIterator for Iter<'a, 'b, K, T> {
     fn next_back(&mut self) -> Option<Self::Item> {
         if self.tail? > self.head? {
             return None;
@@ -888,9 +897,9 @@ impl<'a, 'b, T> DoubleEndedIterator for Iter<'a, 'b, T> {
 }
 
 /// An iterator over mutable references to items in a queue.
-pub struct IterMut<'a, 'b, T: 'a> {
-    inner: &'a mut Queue<T>,
-    tags: Option<&'b [usize]>,
+pub struct IterMut<'a, 'b, K: Ord + Clone + 'a, T: 'a> {
+    inner: &'a mut Queue<K, T>,
+    tags: Option<&'b [K]>,
     head: Option<u64>,
     tail: Option<u64>,
 }
@@ -900,10 +909,10 @@ pub struct IterMut<'a, 'b, T: 'a> {
 // index is always incremented by at least one, which means we'll never produce
 // the same thing again -- even in the DoubleEndedIterator case.
 
-impl<'a, 'b, T> Iterator for IterMut<'a, 'b, T> {
-    type Item = Item<&'a mut T>;
+impl<'a, 'b, K: Ord + Clone, T> Iterator for IterMut<'a, 'b, K, T> {
+    type Item = ItemMut<'a, K, T>;
 
-    fn next(&'_ mut self) -> Option<Item<&'a mut T>> {
+    fn next(&'_ mut self) -> Option<ItemMut<'a, K, T>> {
         if self.tail? > self.head? {
             return None;
         }
@@ -916,15 +925,15 @@ impl<'a, 'b, T> Iterator for IterMut<'a, 'b, T> {
         if item.index > self.head? {
             return None;
         }
-        Some(Item {
+        Some(ItemMut {
             value: unsafe { &mut *(item.value as *mut _) },
             index: item.index,
-            tag: item.tag,
+            tag: unsafe { & *(item.tag as *const _) },
         })
     }
 }
 
-impl<'a, 'b, T> DoubleEndedIterator for IterMut<'a, 'b, T> {
+impl<'a, 'b, K: Ord + Clone, T> DoubleEndedIterator for IterMut<'a, 'b, K, T> {
     fn next_back(&mut self) -> Option<Self::Item> {
         if self.tail? > self.head? {
             return None;
@@ -938,16 +947,16 @@ impl<'a, 'b, T> DoubleEndedIterator for IterMut<'a, 'b, T> {
         if item.index < self.tail? {
             return None;
         }
-        Some(Item {
+        Some(ItemMut {
             value: unsafe { &mut *(item.value as *mut _) },
             index: item.index,
-            tag: item.tag,
+            tag: unsafe { & *(item.tag as *const _) },
         })
     }
 }
 
 /*
-impl<T: std::fmt::Display> std::fmt::Display for Queue<T> {
+impl<T: std::fmt::Display> std::fmt::Display for Queue<K, T> {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         let max_spaces = format!(
             "{}",
