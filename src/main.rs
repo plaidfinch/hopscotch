@@ -15,13 +15,6 @@ fn main() {
                     println!("Result: {:?}", i);
                     count += 1;
                 }
-                ["push_and_pop", k] => {
-                    let tag = k.trim().parse().unwrap();
-                    let i = buffer.push_and_pop(tag, count, false);
-                    println!("{:#?}", buffer);
-                    println!("Result: {:?}", i);
-                    count += 1;
-                }
                 ["pop"] => {
                     let r = buffer.pop();
                     println!("{:#?}", buffer);

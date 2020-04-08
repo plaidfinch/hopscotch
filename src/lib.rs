@@ -3,10 +3,7 @@ use std::collections::VecDeque;
 use std::convert::TryInto;
 use std::iter::FromIterator;
 
-pub mod sparse;
-pub use sparse::Sparse;
-
-// TODO: benchmark
+use im::hashmap::{HashMap, Entry};
 
 /// A `Queue` is a first-in-first-out (FIFO) queue where each item in the
 /// queue is additionally associated with an immutable *tag* of type `usize` and
@@ -31,7 +28,7 @@ pub use sparse::Sparse;
 #[derive(Debug, Clone)]
 pub struct Queue<T> {
     offset: u64,
-    first_with_tag: Sparse<usize>,
+    first_with_tag: HashMap<usize, u64>,
     info: VecDeque<Info>,
     values: VecDeque<T>,
 }
@@ -76,7 +73,7 @@ impl<T> AsMut<T> for Item<&mut T> {
 struct Info {
     tag: usize,
     next_with_tag: usize,
-    previous_with_tag: Sparse<usize>,
+    previous_with_tag: HashMap<usize, u64>,
 }
 
 impl Info {
@@ -104,13 +101,12 @@ macro_rules! get_impl {
             let index = $index;
             let this = $self;
             // Find the item, if one exists
-            let internal_index =
-                index.checked_sub(this.offset)?.try_into().ok()?;
+            let internal_index = this.as_internal_index(index)?;
             let Info{tag, ..} =
                 get!(this.info,
                      internal_index
                      $(, $mutability)?)?;
-            Some(Item{
+            Some(Item {
                 value: & $($mutability)? this.values[internal_index],
                 tag: *tag,
                 index
@@ -126,22 +122,20 @@ macro_rules! get_impl {
 macro_rules! before_impl {
     ($self:expr, $index:expr, $tags:expr $(, $mutability:tt)?) => {
         {
-            let index = $index;
             let tags = $tags;
             let this = $self;
-            let index: usize = index.checked_sub(this.offset)?.try_into().ok()?;
-            let index = index.min(this.len().saturating_sub(1));
+            let index = ($index).min(this.next_index().saturating_sub(1));
+
+            let index: usize = this.as_internal_index(index)?;
             let current = this.info.get(index)?;
-            let (previous_tag, previous_distance) =
-                tags.iter().copied()
+            let (previous_tag, previous_index) =
+                tags.iter()
                 .filter_map(|tag| Some((tag, *current.previous_with_tag.get(tag)?)))
-                .min_by_key(|(_, dist)| dist.clone())?;
-            let previous_index = index.checked_sub(previous_distance)?;
+                .max_by_key(|(_, i)| i.clone())?;
             Some(Item {
-                value: get!(this.values, previous_index $(, $mutability)?)?,
-                tag: previous_tag,
-                index: (previous_index as u64).checked_add(this.offset)
-                    .expect("Queue index overflow")
+                value: get!(this.values, this.as_internal_index(previous_index)? $(, $mutability)?)?,
+                tag: *previous_tag,
+                index: previous_index,
             })
         }
     };
@@ -154,68 +148,87 @@ macro_rules! before_impl {
 macro_rules! after_impl {
     ($self:expr, $index:expr, $tags:expr $(, $mutability:tt)?) => {
         {
-            let index = $index;
             let tags = $tags;
             let this = $self;
-            let (next_index_tag, next_index): (usize, usize) =
-                if let Some(index) = index.checked_sub(this.offset) {
-                    // If the index given refers to an event after the start of
-                    // the event queue at present...
-                    let index = index.try_into().ok()?;
-                    let current = this.info.get(index)?;
-                    tags.iter().copied().map(|tag| {
-                        (tag, if current.has_tag(tag) {
-                            index
-                        } else {
-                            // Get the distance backwards to the previous of
-                            // this tag.
-                            let distance = current.previous_with_tag.get(tag)
-                                .unwrap_or(&usize::max_value());
-                            // Get the index of the previous of this tag
-                            if let Some(previous_index) = index.checked_sub(*distance) {
-                                // If index is >= 0, then find index of the next
-                                // of tag. This will be ahead of the current
-                                // index, because next_k(previous_k(current_k'))
-                                // where k != k' can't lie before current_k' or
-                                // else previous_k should have been next_k, a
-                                // contradiction.
-                                this.info.get(previous_index)
-                                    .map_or(usize::max_value(), |item| {
-                                        previous_index.saturating_add(
-                                            item.next_with_tag
-                                        )})
+            let index = ($index);
+            if index >= this.next_index() {
+                return None;
+            }
+            let here_index = index.max(this.first_index());
+            let here = this.info(here_index);
+
+            let mut minimum: Option<(usize, u64)> = None;
+            if let Some(here_info) = here {
+                for tag in tags {
+                    if *tag == here_info.tag {
+                        minimum = Some((*tag, here_index));
+                        break;
+                    }
+                    let next_index =
+                        if let Some(&previous_index) = here_info.previous_with_tag.get(tag) {
+                            if let Some(info) = this.info(previous_index) {
+                                previous_index.checked_add(info.next_with_tag as u64)
                             } else {
-                                // If previous_index is < 0, then find index of
-                                // the first of this tag. This case happens when
-                                // there were no preceding events of the
-                                // particular tag, but there might be ones in
-                                // the future of it.
-                                let first_index = *this.first_with_tag.get(tag)
-                                    .unwrap_or(&usize::max_value());
-                                first_index
+                                this.first_with_tag.get(&tag).copied()
                             }
-                        })
-                    }).min_by_key(|(_, i)| i.clone())?
-                } else {
-                    // If the index requested lies before the queue, pick whichever
-                    // event in the set of tags happened first in the queue
-                    tags.iter().copied()
-                        .filter_map(|tag| Some((tag, *this.first_with_tag.get(tag)?)))
-                        .min_by_key(|(_, i)| i.clone())?
-                };
+                        } else {
+                            this.first_with_tag.get(&tag).copied()
+                        };
+                    dbg!(next_index);
+                    minimum = match (minimum, next_index) {
+                        (None, Some(next_index))
+                            if this.first_index() <= next_index => {
+                                Some((*tag, next_index))
+                            },
+                        (Some((_, min)), Some(next_index))
+                            if this.first_index() <= next_index && next_index < min => {
+                                Some((*tag, next_index))
+                            },
+                        _ => minimum,
+                    }
+                }
+            } else {
+                minimum = this
+                    .first_with_tag
+                    .iter()
+                    .copied()
+                    .min_by_key(|(_, i)| i.clone());
+            }
             // Get the item at the minimum index and return its exterior-facing
             // index and a reference to the item itself.
+            let (next_tag, next_index) = minimum?;
             Some(Item {
-                value: get!(this.values, next_index $(, $mutability)?)?,
-                tag: next_index_tag,
-                index: (next_index as u64).checked_add(this.offset)
-                    .expect("Queue index overflow")
+                value: get!(this.values, this.as_internal_index(next_index)? $(, $mutability)?)?,
+                tag: next_tag,
+                index: next_index,
             })
         }
     };
 }
 
 impl<T> Queue<T> {
+    /// Given an external persistent index, get the current index within the
+    /// internal queue that corresponds to it. This correspondence is
+    /// invalidated by future changes to the queue.
+    fn as_internal_index(&self, index: u64) -> Option<usize> {
+        index.checked_sub(self.offset)?.try_into().ok()
+    }
+
+    /// Given an internal index in the contained queue, get the persistent index
+    /// in the public interface which corresponds to it. This correspondence is
+    /// invalidated by future changes to the queue.
+    fn as_external_index(&self, index: usize) -> Option<u64> {
+        self.offset.checked_add(index as u64)
+    }
+
+    fn info(&self, index: u64) -> Option<&Info> {
+        self.info.get(self.as_internal_index(index)?)
+    }
+
+    fn info_mut(&mut self, index: u64) -> Option<&mut Info> {
+        self.info.get_mut(self.as_internal_index(index)?)
+    }
+
     /// Make a new queue.
     ///
     /// # Examples
@@ -241,7 +254,7 @@ impl<T> Queue<T> {
     pub fn with_capacity(capacity: usize) -> Queue<T> {
         Queue {
             offset: 0,
-            first_with_tag: Sparse::new(),
+            first_with_tag: HashMap::new(),
             info: VecDeque::with_capacity(capacity),
             values: VecDeque::with_capacity(capacity),
         }
@@ -325,16 +338,6 @@ impl<T> Queue<T> {
     pub fn shrink_to_fit(&mut self) {
         self.info.shrink_to_fit();
         self.values.shrink_to_fit();
-        self.first_with_tag.shrink_to_fit();
-    }
-
-    /// Shrink the memory used by this queue as much as possible. This is a
-    /// potentially expensive operation, as it traverses the entire queue.
-    pub fn shrink_all_to_fit(&mut self) {
-        for info in self.info.iter_mut() {
-            info.previous_with_tag.shrink_to_fit();
-        }
-        self.shrink_to_fit();
     }
 
     /// Get a reference to the first item *exactly at* `index`.
@@ -656,56 +659,41 @@ impl<T> Queue<T> {
     /// assert_eq!(item.into_value(), "Hello!");
     /// ```
     pub fn pop(&mut self) -> Option<Item<T>> {
-        Some(self.pop_and_reclaim()?.0)
-    }
-
-    /// Pop an item off the queue and reclaim the memory it used, so we can
-    /// avoid needless allocations. This is an internal-only function.
-    fn pop_and_reclaim(&mut self) -> Option<(Item<T>, Sparse<usize>)> {
         // The index of the thing that's about to get popped is equal to
         // the current offset, because the offset is incremented exactly
         // every time something is popped:
         let popped_index = self.offset;
         // Pop off the least recent item:
-        let mut popped_info = self.info.pop_front()?;
+        let popped_info = self.info.pop_front()?;
         let popped_value = self.values.pop_front()?;
         // Decrement the forward distance for first_with_tag of every event tag
         // *except* the current, which should be set to the distance of the next
         // of that tag
-        let queue_len = self.len();
-        self.first_with_tag.retain(|t, dist| {
-            if popped_info.has_tag(t) {
-                *dist = popped_info.next_with_tag;
+        let popped_next_with_tag =
+            popped_index.checked_add(popped_info.next_with_tag as u64);
+        let next_index = self.next_index();
+        if let Some(next_index_with_tag) = popped_next_with_tag {
+            match self.first_with_tag.entry(popped_info.tag) {
+                Entry::Occupied(mut entry) => {
+                    if next_index_with_tag >= next_index {
+                        entry.remove_entry();
+                    } else {
+                        *entry.get_mut() = next_index_with_tag;
+                    }
+                },
+                Entry::Vacant(_) => {
+                    panic!("Queue invariant violation: popped tag not in first_with_tag")
+                },
             }
-            // It's safe to .unwrap() below because:
-            // - if popped.has_tag(k), then *dist = popped.next_with_tag
-            //   and popped.next_with_tag > 0, because this invariant
-            //   always holds for next_with_tag
-            // - if !popped.has_tag(k), then *dist > 0 because *dist
-            //   should always hold the index of the thing with tag k,
-            //   and we know that the thing at index 0 is not with tag k
-            if *dist <= queue_len {
-                *dist = dist
-                    .checked_sub(1)
-                    .expect("Zero in wrong place in first_with_tag");
-                true // keep this thing
-            } else {
-                false // drop this thing
-            }
-        });
-        // Clear the vec but retain its memory
-        popped_info.previous_with_tag.clear();
+        }
         // Bump the offset because we just shifted the queue
         self.offset = self.offset.checked_add(1).expect("Queue index overflow");
         // Return the pieces
-        Some((
-            Item {
-                value: popped_value,
-                tag: popped_info.tag,
-                index: popped_index,
-            },
-            popped_info.previous_with_tag,
-        ))
+        Some(Item {
+            value: popped_value,
+            tag: popped_info.tag,
+            index: popped_index,
+        })
     }
 
     /// Push a new item into the queue, returning its assigned index.
@@ -719,138 +707,36 @@ impl<T> Queue<T> {
     /// queue.push(0, "Hello!".to_string());
     /// ```
     pub fn push(&mut self, tag: usize, value: T) -> u64 {
-        self.push_and_maybe_pop(tag, value, false).0
-    }
-
-    /// Push a new item into the queue, evicting the least recent item from the
-    /// queue at the same time, and returning that old item, if one existed.
-    /// This is equivalent to calling `pop` and then `push`, but is more
-    /// efficient because it saves allocations.
-    ///
-    /// The `shrink` parameter determines whether memory reclaimed during
-    /// popping should be shrunk to fit before being reused. Setting it to
-    /// `false` can increase performance by reducing load on the allocator, but
-    /// at the cost of potentially greater memory consumption. Space temporarily
-    /// leaked by setting `shrink` to `false` can be reclaimed using
-    /// `shrink_all_to_fit` -- but note that this is an expensive operation that
-    /// takes time proportionate to the memory used by the queue.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use hopscotch::Queue;
-    ///
-    /// let mut queue: Queue<String> = Queue::new();
-    /// queue.push(42, "Hello!".to_string());
-    /// let (new_index, popped) = queue.push_and_pop(1, "Goodbye!".to_string(), false);
-    /// let item = popped.unwrap();
-    ///
-    /// assert_eq!(new_index, 1);
-    /// assert_eq!(item.index(), 0);
-    /// assert_eq!(item.tag(), 42);
-    /// assert_eq!(item.into_value(), "Hello!");
-    /// ```
-    pub fn push_and_pop(&mut self, tag: usize, value: T, shrink: bool) -> (u64, Option<Item<T>>) {
-        let result = self.push_and_maybe_pop(tag, value, true);
-        if shrink {
-            self.info
-                .front_mut()
-                .unwrap()
-                .previous_with_tag
-                .shrink_to_fit();
-        }
-        result
-    }
-
-    /// Push a new item into the queue, potentially evicting an old item if the
-    /// queue is full. Returns the index of the newly pushed item paired with
-    /// the old item and its own index, if an old item was evicted.
-    fn push_and_maybe_pop(
-        &mut self,
-        tag: usize,
-        value: T,
-        also_pop: bool,
-    ) -> (u64, Option<Item<T>>) {
-        // Calculate the backward distance to the previous of this tag.
-        let distance_to_previous = self
-            .info
-            .back()
-            .and_then(|latest| latest.previous_with_tag.get(tag).copied())
-            .unwrap_or(usize::max_value())
-            .saturating_add(1);
-        // Find the previous of this tag, if any, and set its next_with_tag
-        // pointer to point to this new item
-        self.info
-            .len()
-            .checked_sub(distance_to_previous)
-            .and_then(|i| self.info.get_mut(i))
-            .map(|item| item.next_with_tag = distance_to_previous);
-        // Get a fresh vector for tracking the distance to all previous events,
-        // either by reclaiming memory of the least recent event (if directed to
-        // pop) or by allocating a new one.
-        let (popped_item, mut previous_with_tag) = if also_pop {
-            if let Some((item, vec)) = self.pop_and_reclaim() {
-                (Some(item), vec)
-            } else {
-                (None, Sparse::new())
-            }
-        } else {
-            (None, Sparse::new())
-        };
-        // Populate the vector with the relative backward distances to the
-        // previous events of each tag.
-        if let Some(latest) = self.info.back() {
-            let mut tag_inserted = false;
-            for (t, dist) in latest.previous_with_tag.iter() {
-                match t.cmp(&tag) {
-                    Ordering::Less => {
-                        if *dist < self.info.len() {
-                            previous_with_tag.entry(t).insert(dist.saturating_add(1));
-                        }
-                    }
-                    Ordering::Equal => {
-                        previous_with_tag.entry(t).insert(0);
-                        tag_inserted = true;
-                    }
-                    Ordering::Greater => {
-                        if !tag_inserted {
-                            previous_with_tag.entry(tag).insert(0);
-                            tag_inserted = true;
-                        }
-                        if *dist < self.info.len() {
-                            previous_with_tag.entry(t).insert(dist.saturating_add(1));
-                        }
-                    }
-                }
-            }
-            if !tag_inserted {
-                previous_with_tag.entry(tag).insert(0);
-                // tag_inserted = true;
-            }
-        } else {
-            previous_with_tag.entry(tag).insert(0);
-        }
-        // Free memory from the given vec that isn't necessary anymore
-        previous_with_tag.shrink_to_fit();
+        // The index we're about to push
+        let pushed_index = self.next_index();
+        let mut previous_with_tag =
+            self.info.back()
+            .map(|latest| latest.previous_with_tag.clone())
+            .unwrap_or_else(HashMap::new);
+        // Set the next_with_tag index of the previous of this tag to point to
+        // the index we're about to insert at.
+        previous_with_tag.get(&tag)
+            .map(|previous_index| {
+                self.info_mut(*previous_index).map(|previous_info| {
+                    let distance =
+                        (pushed_index - previous_index).try_into()
+                        .expect("Queue invariant violation: distance greater than usize::max_value()");
+                    previous_info.next_with_tag = distance;
+                });
+            });
         // Actually insert the item into the queue
+        previous_with_tag.insert(tag, pushed_index);
         self.info.push_back(Info {
             tag,
-            next_with_tag: usize::max_value(),
             previous_with_tag,
+            next_with_tag: usize::max_value(),
         });
         self.values.push_back(value);
         // Make sure first_with_tag tracks this event, if it is the current
         // first of its tag:
-        if self.first_with_tag.get(tag).is_none() {
-            self.first_with_tag.entry(tag).insert(self.info.len() - 1);
-        }
-        (
-            self.offset
-                .checked_add(self.len() as u64)
-                .expect("Queue index overflow")
-                - 1,
-            popped_item,
-        )
+        self.first_with_tag.entry(tag).or_insert(pushed_index);
+        // Return the new index
+        pushed_index
     }
 
     /// Get an iterator of immutable items matching any of the given tags, whose
@@ -1060,6 +946,7 @@ impl<'a, 'b, T> DoubleEndedIterator for IterMut<'a, 'b, T> {
     }
 }
 
+/*
 impl<T: std::fmt::Display> std::fmt::Display for Queue<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         let max_spaces = format!(
@@ -1159,3 +1046,4 @@ impl<T: std::fmt::Display> std::fmt::Display for Queue<T> {
         Ok(())
     }
 }
+*/

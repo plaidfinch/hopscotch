@@ -94,7 +94,6 @@ enum Operation<T> {
     NextIndex,
     FirstIndex,
     ShrinkToFit,
-    ShrinkAllToFit,
     Get(u64),
     GetMutAndSet(u64, T),
     After(u64, Vec<usize>),
@@ -103,28 +102,25 @@ enum Operation<T> {
     BeforeMutAndSet(u64, Vec<usize>, T),
     Push(usize, T),
     Pop,
-    PopAndPush(usize, T, bool),
 }
 
 impl<T: Arbitrary> Arbitrary for Operation<T> {
     fn arbitrary<G: Gen>(g: &mut G) -> Self {
         use Operation::*;
-        match usize::arbitrary(g) % 15 {
+        match usize::arbitrary(g) % 13 {
             0 => Len,
             1 => Clear,
             2 => NextIndex,
             3 => FirstIndex,
             4 => ShrinkToFit,
-            5 => ShrinkAllToFit,
-            6 => Get(u64::arbitrary(g)),
-            7 => GetMutAndSet(u64::arbitrary(g), T::arbitrary(g)),
-            8 => After(u64::arbitrary(g), Vec::arbitrary(g)),
-            9 => AfterMutAndSet(u64::arbitrary(g), Vec::arbitrary(g), T::arbitrary(g)),
-            10 => Before(u64::arbitrary(g), Vec::arbitrary(g)),
-            11 => BeforeMutAndSet(u64::arbitrary(g), Vec::arbitrary(g), T::arbitrary(g)),
-            12 => Push(usize::arbitrary(g), T::arbitrary(g)),
-            13 => Pop,
-            14 => PopAndPush(usize::arbitrary(g), T::arbitrary(g), bool::arbitrary(g)),
+            5 => Get(u64::arbitrary(g)),
+            6 => GetMutAndSet(u64::arbitrary(g), T::arbitrary(g)),
+            7 => After(u64::arbitrary(g), Vec::arbitrary(g)),
+            8 => AfterMutAndSet(u64::arbitrary(g), Vec::arbitrary(g), T::arbitrary(g)),
+            9 => Before(u64::arbitrary(g), Vec::arbitrary(g)),
+            10 => BeforeMutAndSet(u64::arbitrary(g), Vec::arbitrary(g), T::arbitrary(g)),
+            11 => Push(usize::arbitrary(g), T::arbitrary(g)),
+            12 => Pop,
             _ => panic!("Bad discriminant while generating operation!"),
         }
     }
@@ -137,7 +133,6 @@ impl<T: Arbitrary> Arbitrary for Operation<T> {
             NextIndex => Box::new(iter::empty()),
             FirstIndex => Box::new(iter::empty()),
             ShrinkToFit => Box::new(iter::empty()),
-            ShrinkAllToFit => Box::new(iter::empty()),
             Get(index) => Box::new(index.shrink().map(Get)),
             GetMutAndSet(index, new) =>
                 Box::new((index.clone(), new.clone()).shrink()
@@ -158,9 +153,6 @@ impl<T: Arbitrary> Arbitrary for Operation<T> {
                 Box::new((tag.clone(), value.clone()).shrink()
                         .map(|(t, v)| Push(t, v))),
             Pop => Box::new(iter::empty()),
-            PopAndPush(tag, value, shrink) =>
-                Box::new((tag.clone(), value.clone(), shrink.clone()).shrink()
-                        .map(|(t, v, s)| PopAndPush(t, v, s))),
         }
     }
 }
@@ -181,7 +173,7 @@ fn simulates_simple_queue(operations: Vec<Operation<usize>>) -> bool {
 #[test]
 fn prop_simulates_simple_queue() {
     QuickCheck::new()
-        .tests(1_000)
+        .tests(10_000)
         .quickcheck(simulates_simple_queue as fn(Vec<Operation<usize>>) -> bool)
 }
 
@@ -202,10 +194,6 @@ fn simulate<T: Eq + Clone + Debug>(
         ShrinkToFit => {
             simple.shrink_to_fit();
             complex.shrink_to_fit();
-        },
-        ShrinkAllToFit => {
-            simple.shrink_all_to_fit();
-            complex.shrink_all_to_fit();
         },
         Get(index) => {
             let s = simple.get(index);
@@ -255,11 +243,6 @@ fn simulate<T: Eq + Clone + Debug>(
         Push(tag, value) =>
             return simple.push(tag, value.clone()) == complex.push(tag, value),
         Pop => return simple.pop() == complex.pop().map(hopscotch::Item::into),
-        PopAndPush(tag, value, shrink) => {
-            let (i, s) = simple.push_and_pop(tag, value.clone(), shrink);
-            let (j, c) = complex.push_and_pop(tag, value, shrink);
-            return (i, s) == (j, c.map(hopscotch::Item::into));
-        },
     }
     true
 }
@@ -348,10 +331,6 @@ mod simple {
             self.inner.shrink_to_fit();
         }
 
-        pub fn shrink_all_to_fit(&mut self) {
-            self.shrink_to_fit();
-        }
-
         pub fn get(&self, index: u64) -> Option<Item<&T>> {
             let inner_index = index.checked_sub(self.offset)?.try_into().ok()?;
             let (tag, value) = self.inner.get(inner_index)?;
@@ -421,12 +400,6 @@ mod simple {
             let result = Item{tag, value, index: self.offset};
             self.offset += 1;
             Some(result)
-        }
-
-        pub fn push_and_pop(&mut self, tag: usize, value: T, _shrink: bool) -> (u64, Option<Item<T>>) {
-            let popped = self.pop();
-            let index = self.push(tag, value);
-            (index, popped)
         }
     }
 }
