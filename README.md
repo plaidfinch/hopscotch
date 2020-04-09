@@ -13,8 +13,8 @@ FIFO queue, a hopscotch queue also supports the methods `after` and
 `before` (and their respective `_mut` variants):
 
 ```rust
-pub fn after(&self, index: u64, tags: &[K]) -> Option<Item<K, T>>
-pub fn before(&self, index: u64, tags: &[K]) -> Option<Item<K, T>>
+pub fn after(&self, index: u64, tags: &[K]) -> Option<Item<K, T>> { ... }
+pub fn before(&self, index: u64, tags: &[K]) -> Option<Item<K, T>> { ... }
 ```
 
 These methods find next item in the queue whose tag is equal to any of a given
