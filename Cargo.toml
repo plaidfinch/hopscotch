@@ -15,6 +15,7 @@ harness = false
 
 [dependencies]
 im = "14.3"
+nohash-hasher = "0.2"
 
 [dev-dependencies]
 quickcheck = "0.9"

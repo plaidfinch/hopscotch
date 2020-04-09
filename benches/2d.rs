@@ -1,8 +1,11 @@
+#![feature(const_int_pow)]
+
 use criterion::{
     black_box, criterion_group, criterion_main,
     Criterion, BenchmarkId, Throughput,
 };
 use rand::Rng;
+use std::collections::VecDeque;
 
 use hopscotch::Queue;
 
@@ -20,12 +23,13 @@ fn unit_queue_from_tags(tags: impl IntoIterator<Item = usize>) -> Queue<usize, (
     queue
 }
 
-const LENGTH: usize = 1_000;
+const MAX_POW_2: u32 = 16;
+const LENGTH: usize = 2_usize.pow(MAX_POW_2);
 const WIDTH_GRANULARITY: usize = 10;
 
 fn bench_create(c: &mut Criterion) {
     let mut group = c.benchmark_group("create");
-    for width in (1 ..= 100).map(|s| s * WIDTH_GRANULARITY) {
+    for width in (1 ..= MAX_POW_2).map(|s| 2_usize.pow(s)) {
         let id = BenchmarkId::from_parameter(width);
         group.sample_size(20);
         group.throughput(Throughput::Elements(LENGTH as u64));
@@ -42,7 +46,7 @@ fn bench_create(c: &mut Criterion) {
 
 fn bench_get(c: &mut Criterion) {
     let mut group = c.benchmark_group("get");
-    for width in (1 ..= 100).map(|s| s * WIDTH_GRANULARITY) {
+    for width in (1 ..= MAX_POW_2).map(|s| 2_usize.pow(s)) {
         let id = BenchmarkId::from_parameter(width);
         let tags = random_tags(black_box(width)).take(black_box(LENGTH));
         let queue = unit_queue_from_tags(tags);
@@ -57,15 +61,15 @@ fn bench_get(c: &mut Criterion) {
 
 fn bench_after(c: &mut Criterion) {
     let mut group = c.benchmark_group("after");
-    for width in (1 ..= 100).map(|s| s * WIDTH_GRANULARITY) {
+    for width in (1 ..= MAX_POW_2).map(|s| 2_usize.pow(s)) {
         for needle_width in
-            (1 .. WIDTH_GRANULARITY)
-            .chain((1 ..= 10).map(|s| s * WIDTH_GRANULARITY))
+            (1 .. MAX_POW_2)
+            .map(|s| 2_usize.pow(s))
             .filter(|s| *s <= width)
         {
             let name = format!("width: {}, tags: {}", width, needle_width);
             let id = BenchmarkId::from_parameter(name);
-            let tags = random_tags(black_box(width)).take(black_box(LENGTH));
+            let tags = random_tags(black_box(width)).take(LENGTH);
             let queue = unit_queue_from_tags(tags);
             group.throughput(Throughput::Elements(needle_width as u64));
             group.bench_function(id, |b| {
@@ -82,5 +86,25 @@ fn bench_after(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_create);
+fn bench_queue(c: &mut Criterion) {
+    let mut group = c.benchmark_group("constant size queue");
+    for width in (1 ..= MAX_POW_2).map(|s| 2_usize.pow(s)) {
+        let id = BenchmarkId::from_parameter(width);
+        group.throughput(Throughput::Elements(1));
+        let samples = 100;
+        group.sample_size(samples);
+        group.bench_with_input(id, &width, |b, width| {
+            let tags =
+                random_tags(*width).take(LENGTH);
+            let mut queue: Queue<usize, ()> =
+                unit_queue_from_tags(tags);
+            b.iter(|| {
+                let popped = queue.pop().unwrap();
+                queue.push(popped.tag, black_box(()))
+            });
+        });
+    }
+}
+
+criterion_group!(benches, bench_find);
 criterion_main!(benches);

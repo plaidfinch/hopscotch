@@ -1,8 +1,10 @@
 use std::collections::VecDeque;
 use std::convert::TryInto;
 use std::iter::FromIterator;
+use std::hash::{Hash, BuildHasherDefault};
 
-use im::ordmap::OrdMap;
+use im::hashmap::HashMap;
+use nohash_hasher::{IsEnabled, NoHashHasher};
 
 /// A `Queue` is a first-in-first-out (FIFO) queue where each item in the queue
 /// is additionally associated with an immutable *tag* of type `K` and a
@@ -20,9 +22,9 @@ use im::ordmap::OrdMap;
 /// time relative to the size of the queue and the distance between successive
 /// items of the same tag.
 #[derive(Debug, Clone)]
-pub struct Queue<K: Ord + Clone, T> {
+pub struct Queue<K: IsEnabled + Eq + Hash + Clone, T> {
     offset: u64,
-    first_with_tag: OrdMap<K, u64>,
+    first_with_tag: HashMap<K, u64, BuildHasherDefault<NoHashHasher<K>>>,
     info: VecDeque<Info<K>>,
     values: VecDeque<T>,
 }
@@ -67,7 +69,7 @@ impl<'a, K, T> Item<'a, K, T> {
     pub fn value(&self) -> &'a T { self.value }
 }
 
-impl<'a, K: Ord + Clone, T> ItemMut<'a, K, T> {
+impl<'a, K: IsEnabled + Eq + Hash + Clone, T> ItemMut<'a, K, T> {
     /// The index of the item: this is unique for the entire lifetime of the
     /// queue from which this item originated.
     pub fn index(&self) -> u64 { self.index }
@@ -81,29 +83,29 @@ impl<'a, K: Ord + Clone, T> ItemMut<'a, K, T> {
     pub fn into_mut(self) -> &'a mut T { self.value }
 }
 
-impl<K: Ord + Clone, T> AsRef<T> for Item<'_, K, T> {
+impl<K: IsEnabled + Eq + Hash + Clone, T> AsRef<T> for Item<'_, K, T> {
     fn as_ref(&self) -> &T {
         self.value
     }
 }
 
-impl<K: Ord + Clone, T> AsRef<T> for ItemMut<'_, K, T> {
+impl<K: IsEnabled + Eq + Hash + Clone, T> AsRef<T> for ItemMut<'_, K, T> {
     fn as_ref(&self) -> &T {
         &*self.value
     }
 }
 
-impl<K: Ord + Clone, T> AsMut<T> for ItemMut<'_, K, T> {
+impl<K: IsEnabled + Eq + Hash + Clone, T> AsMut<T> for ItemMut<'_, K, T> {
     fn as_mut(&mut self) -> &mut T {
         self.value
     }
 }
 
 #[derive(Debug, Clone)]
-struct Info<K: Ord> {
+struct Info<K: IsEnabled + Eq + Hash> {
     tag: K,
     next_with_tag: usize,
-    previous_with_tag: OrdMap<K, u64>,
+    previous_with_tag: HashMap<K, u64, BuildHasherDefault<NoHashHasher<K>>>,
 }
 
 /// Either e.get(i), or e.get_mut(i), depending on whether a third argument is
@@ -219,7 +221,7 @@ macro_rules! after_impl {
     };
 }
 
-impl<K: Ord + Clone, T> Queue<K, T> {
+impl<K: IsEnabled + Eq + Hash + Clone, T> Queue<K, T> {
     /// Given an external persistent index, get the current index within the
     /// internal queue that corresponds to it. This correspondence is
     /// invalidated by future changes to the queue.
@@ -258,9 +260,11 @@ impl<K: Ord + Clone, T> Queue<K, T> {
     /// let mut queue: Queue<usize, usize> = Queue::with_capacity(10);
     /// ```
     pub fn with_capacity(capacity: usize) -> Queue<K, T> {
+        let map: HashMap::<K, u64, BuildHasherDefault<NoHashHasher<K>>> =
+            HashMap::with_hasher(BuildHasherDefault::default());
         Queue {
             offset: 0,
-            first_with_tag: OrdMap::new(),
+            first_with_tag: map,
             info: VecDeque::with_capacity(capacity),
             values: VecDeque::with_capacity(capacity),
         }
@@ -681,19 +685,16 @@ impl<K: Ord + Clone, T> Queue<K, T> {
         // Decrement the forward distance for first_with_tag of every event tag
         // *except* the current, which should be set to the distance of the next
         // of that tag
-        let popped_next_with_tag =
-            popped_index.checked_add(popped_info.next_with_tag as u64);
-        let next_index = self.next_index();
-        if let Some(next_index_with_tag) = popped_next_with_tag {
-            if next_index_with_tag >= next_index {
-                self.first_with_tag.remove(&popped_info.tag)
-                    .expect("Queue invariant violation: no first_with_tag for extant tag");
-            } else {
-                let first_index =
-                    self.first_with_tag.get_mut(&popped_info.tag)
-                    .expect("Queue invariant violation: no first_with_tag for extant tag");
-                *first_index = next_index_with_tag;
-            }
+        let next_index_with_tag =
+            popped_index.saturating_add(popped_info.next_with_tag as u64);
+        if next_index_with_tag == u64::max_value() {
+            self.first_with_tag.remove(&popped_info.tag)
+                .expect("Queue invariant violation: no first_with_tag for extant tag");
+        } else {
+            let first_index =
+                self.first_with_tag.get_mut(&popped_info.tag)
+                .expect("Queue invariant violation: no first_with_tag for extant tag");
+            *first_index = next_index_with_tag;
         }
         // Bump the offset because we just shifted the queue
         self.offset = self.offset.checked_add(1).expect("Queue index overflow");
@@ -721,7 +722,7 @@ impl<K: Ord + Clone, T> Queue<K, T> {
         let mut previous_with_tag =
             self.info.back()
             .map(|latest| latest.previous_with_tag.clone())
-            .unwrap_or_else(OrdMap::new);
+            .unwrap_or_else(|| HashMap::with_hasher(BuildHasherDefault::default()));
         // Set the next_with_tag index of the previous of this tag to point to
         // the index we're about to insert at.
         previous_with_tag.get(&tag)
@@ -828,7 +829,7 @@ impl<K: Ord + Clone, T> Queue<K, T> {
     }
 }
 
-impl<K: Ord + Clone, T> FromIterator<(K, T)> for Queue<K, T> {
+impl<K: IsEnabled + Eq + Hash + Clone, T> FromIterator<(K, T)> for Queue<K, T> {
     fn from_iter<I>(iter: I) -> Self
     where
         I: IntoIterator<Item = (K, T)>,
@@ -842,7 +843,7 @@ impl<K: Ord + Clone, T> FromIterator<(K, T)> for Queue<K, T> {
     }
 }
 
-impl<K: Ord + Clone, T> Extend<(K, T)> for Queue<K, T> {
+impl<K: IsEnabled + Eq + Hash + Clone, T> Extend<(K, T)> for Queue<K, T> {
     fn extend<I>(&mut self, iter: I) where I: IntoIterator<Item = (K, T)> {
         for (tag, item) in iter {
             self.push(tag, item);
@@ -851,14 +852,14 @@ impl<K: Ord + Clone, T> Extend<(K, T)> for Queue<K, T> {
 }
 
 /// An iterator over immutable references to items in a queue.
-pub struct Iter<'a, 'b, K: Ord + Clone, T> {
+pub struct Iter<'a, 'b, K: IsEnabled + Eq + Hash + Clone, T> {
     inner: &'a Queue<K, T>,
     tags: Option<&'b [K]>,
     head: Option<u64>,
     tail: Option<u64>,
 }
 
-impl<'a, 'b, K: Ord + Clone, T> Iterator for Iter<'a, 'b, K, T> {
+impl<'a, 'b, K: IsEnabled + Eq + Hash + Clone, T> Iterator for Iter<'a, 'b, K, T> {
     type Item = Item<'a, K, T>;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -878,7 +879,7 @@ impl<'a, 'b, K: Ord + Clone, T> Iterator for Iter<'a, 'b, K, T> {
     }
 }
 
-impl<'a, 'b, K: Ord + Clone, T> DoubleEndedIterator for Iter<'a, 'b, K, T> {
+impl<'a, 'b, K: IsEnabled + Eq + Hash + Clone, T> DoubleEndedIterator for Iter<'a, 'b, K, T> {
     fn next_back(&mut self) -> Option<Self::Item> {
         if self.tail? > self.head? {
             return None;
@@ -897,7 +898,7 @@ impl<'a, 'b, K: Ord + Clone, T> DoubleEndedIterator for Iter<'a, 'b, K, T> {
 }
 
 /// An iterator over mutable references to items in a queue.
-pub struct IterMut<'a, 'b, K: Ord + Clone + 'a, T: 'a> {
+pub struct IterMut<'a, 'b, K: IsEnabled + Eq + Hash + Clone + 'a, T: 'a> {
     inner: &'a mut Queue<K, T>,
     tags: Option<&'b [K]>,
     head: Option<u64>,
@@ -909,7 +910,7 @@ pub struct IterMut<'a, 'b, K: Ord + Clone + 'a, T: 'a> {
 // index is always incremented by at least one, which means we'll never produce
 // the same thing again -- even in the DoubleEndedIterator case.
 
-impl<'a, 'b, K: Ord + Clone, T> Iterator for IterMut<'a, 'b, K, T> {
+impl<'a, 'b, K: IsEnabled + Eq + Hash + Clone, T> Iterator for IterMut<'a, 'b, K, T> {
     type Item = ItemMut<'a, K, T>;
 
     fn next(&'_ mut self) -> Option<ItemMut<'a, K, T>> {
@@ -933,7 +934,7 @@ impl<'a, 'b, K: Ord + Clone, T> Iterator for IterMut<'a, 'b, K, T> {
     }
 }
 
-impl<'a, 'b, K: Ord + Clone, T> DoubleEndedIterator for IterMut<'a, 'b, K, T> {
+impl<'a, 'b, K: IsEnabled + Eq + Hash + Clone, T> DoubleEndedIterator for IterMut<'a, 'b, K, T> {
     fn next_back(&mut self) -> Option<Self::Item> {
         if self.tail? > self.head? {
             return None;
