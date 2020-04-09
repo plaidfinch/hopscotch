@@ -2,7 +2,6 @@
 
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 use rand::Rng;
-use std::collections::VecDeque;
 
 use hopscotch::Queue;
 
@@ -22,7 +21,6 @@ fn unit_queue_from_tags(tags: impl IntoIterator<Item = usize>) -> Queue<usize, (
 
 const MAX_POW_2: u32 = 16;
 const LENGTH: usize = 2_usize.pow(MAX_POW_2);
-const WIDTH_GRANULARITY: usize = 10;
 
 fn bench_create(c: &mut Criterion) {
     let mut group = c.benchmark_group("create");
@@ -107,6 +105,5 @@ criterion_group!(
     bench_queue,
     bench_get,
     bench_after,
-    bench_find,
 );
 criterion_main!(benches);
