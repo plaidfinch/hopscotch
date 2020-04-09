@@ -1,8 +1,16 @@
 [package]
 name = "hopscotch"
-version = "0.1.0"
-authors = ["Kenny Foner <kwf@galois.com>"]
+version = "0.0.1"
+authors = ["Kenny Foner <kwf@very.science>"]
 edition = "2018"
+description = "A FIFO queue for efficiently hopping and skipping between tagged items"
+readme = "README.md"
+homepage = "http://www.github.com/kwf/hopscotch"
+repository = "http://www.github.com/kwf/hopscotch"
+license = "MIT"
+license-file = "LICENSE"
+keywords = ["queue", "data-structure", "data-structures"]
+
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
