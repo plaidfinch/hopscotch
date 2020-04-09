@@ -1,3 +1,26 @@
+//! A `hopscotch::Queue` is a earliest-in-earliest-out (FIFO) queue where each
+//! item in the queue is additionally associated with an immutable *tag* of type
+//! `K` and a uniquely assigned sequential *index* of type `u64`. Unlike in a
+//! queue like `VecDeque`, queue operations *do not* change the `index` of
+//! items; the index is fixed from the time of the item's insertion to its
+//! removal, and each new inserted item is given an index one greater than that
+//! inserted before it.
+//!
+//! In addition to supporting the ordinary `push`, `pop`, and `get` methods of a
+//! FIFO queue, a `Queue` supports the methods `after` and `before` (and their
+//! respective `mut` variants), which query the queue to determine the next item
+//! in the queue whose `tag` is any of a given set of tags. These methods run in
+//! linear time relative to the number of tags queried, logarithmic time
+//! relative to the total number of distinct tags in the queue, and constant
+//! time relative to the size of the queue and the distance between successive
+//! items of the same tag.
+//!
+//! This data structure is significantly optimized for small keys. The types
+//! usable as tags are limited to: `u8, u16, u32, u64, usize, i8, i16, i32, i64,
+//! isize`, or any third-party types which are instances of the `nohash-hasher`
+//! crate's `IsEnabled` trait. In practice, it's usually the right choice to
+//! just pick one of these tag types, or a newtype thereof.
+
 use std::collections::VecDeque;
 use std::convert::TryInto;
 use std::iter::FromIterator;
@@ -6,27 +29,11 @@ use std::hash::{Hash, BuildHasherDefault};
 use im::hashmap::HashMap;
 use nohash_hasher::{IsEnabled, NoHashHasher};
 
-/// A `Queue` is a earliest-in-earliest-out (FIFO) queue where each item in the queue
-/// is additionally associated with an immutable *tag* of type `K` and a
-/// uniquely assigned sequential *index* of type `u64`. Unlike in a queue like
-/// `VecDeque`, queue operations *do not* change the `index` of items; the index
-/// is fixed from the time of the item's insertion to its removal, and each new
-/// inserted item is given an index one greater than that inserted before it.
+/// A hopscotch queue with keys of type `K` and items of type `T`.
 ///
-/// In addition to supporting the ordinary `push`, `pop`, and `get` methods of a
-/// FIFO queue, a `Queue` supports the methods `after` and `before` (and their
-/// respective `mut` variants), which query the queue to determine the next item
-/// in the queue whose `tag` is any of a given set of tags. These methods run in
-/// linear time relative to the number of tags queried, logarithmic time
-/// relative to the total number of distinct tags in the queue, and constant
-/// time relative to the size of the queue and the distance between successive
-/// items of the same tag.
-///
-/// This data structure is significantly optimized for small keys. The types
-/// usable as tags are limited to: `u8, u16, u32, u64, usize, i8, i16, i32, i64,
-/// isize`, or any third-party types which are instances of the `nohash-hasher`
-/// crate's `IsEnabled` trait. In practice, it's usually the right choice to
-/// just pick one of these tag types, or a newtype thereof.
+/// Note that the types of keys are constrained by the `IsEnabled` trait from
+/// the `nohash-hasher` crate, which effectively limits them to the set of
+/// primitive types: `u8, u16, u32, u64, usize, i8, i16, i32, i64, isize`.
 #[derive(Debug, Clone)]
 pub struct Queue<K: IsEnabled + Eq + Hash + Clone, T> {
     offset: u64,
@@ -294,6 +301,9 @@ impl<K: IsEnabled + Eq + Hash + Clone, T> Queue<K, T> {
 
     /// Returns `true` if and only if the queue is empty.
     ///
+    /// # Examples
+    ///
+    /// ```
     /// use hopscotch::Queue;
     ///
     /// let mut queue: Queue<usize, usize> = Queue::new();
@@ -303,6 +313,117 @@ impl<K: IsEnabled + Eq + Hash + Clone, T> Queue<K, T> {
     /// ```
     pub fn is_empty(&self) -> bool {
         self.len() == 0
+    }
+
+    /// Push a new item into the queue, returning its assigned index.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use hopscotch::Queue;
+    ///
+    /// let mut queue: Queue<usize, String> = Queue::new();
+    /// queue.push(0, "Hello!".to_string());
+    /// ```
+    pub fn push(&mut self, tag: K, value: T) -> u64 {
+        // The index we're about to push
+        let pushed_index = self.next_index();
+        let mut previous_with_tag =
+            self.info.back()
+            .map(|latest| latest.previous_with_tag.clone())
+            .unwrap_or_else(|| HashMap::with_hasher(BuildHasherDefault::default()));
+        // Set the next_with_tag index of the previous of this tag to point to
+        // the index we're about to insert at.
+        previous_with_tag.get(&tag)
+            .map(|previous_index| {
+                self.info_mut(*previous_index).map(|previous_info| {
+                    let distance =
+                        (pushed_index - previous_index).try_into()
+                        .expect("Queue invariant violation: distance greater than usize::max_value()");
+                    previous_info.next_with_tag = distance;
+                });
+            });
+        // Actually insert the item into the queue
+        previous_with_tag.insert(tag.clone(), pushed_index);
+        self.info.push_back(Info {
+            tag: tag.clone(),
+            previous_with_tag,
+            next_with_tag: usize::max_value(),
+        });
+        self.values.push_back(value);
+        // Make sure first_with_tag tracks this event, if it is the current
+        // earliest of its tag:
+        self.first_with_tag.entry(tag).or_insert(pushed_index);
+        // Return the new index
+        pushed_index
+    }
+
+    /// Pop an item off the back of the queue and return it.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use hopscotch::Queue;
+    ///
+    /// # fn main() -> Result<(), ()> { (|| {
+    /// let mut queue: Queue<usize, String> = Queue::new();
+    /// queue.push(42, "Hello!".to_string());
+    /// let item = queue.pop()?;
+    ///
+    /// assert_eq!(item.index, 0);
+    /// assert_eq!(item.tag, 42);
+    /// assert_eq!(item.value, "Hello!");
+    /// # Some(()) })().map_or_else(|| Err(()), Ok) }
+    /// ```
+    pub fn pop(&mut self) -> Option<Popped<K, T>> {
+        // The index of the thing that's about to get popped is equal to
+        // the current offset, because the offset is incremented exactly
+        // every time something is popped:
+        let popped_index = self.offset;
+        // Pop off the least recent item:
+        let popped_info = self.info.pop_front()?;
+        let popped_value = self.values.pop_front()?;
+        // Decrement the forward distance for first_with_tag of every event tag
+        // *except* the current, which should be set to the distance of the next
+        // of that tag
+        let next_index_with_tag =
+            popped_index.saturating_add(popped_info.next_with_tag as u64);
+        if next_index_with_tag == u64::max_value() {
+            self.first_with_tag.remove(&popped_info.tag)
+                .expect("Queue invariant violation: no first_with_tag for extant tag");
+        } else {
+            let earliest_index =
+                self.first_with_tag.get_mut(&popped_info.tag)
+                .expect("Queue invariant violation: no first_with_tag for extant tag");
+            *earliest_index = next_index_with_tag;
+        }
+        // Bump the offset because we just shifted the queue
+        self.offset = self.offset.checked_add(1).expect("Queue index overflow");
+        // Return the pieces
+        Some(Popped {
+            value: popped_value,
+            tag: popped_info.tag,
+            index: popped_index,
+        })
+    }
+
+    /// Clear the contents of the queue without de-allocating the queue's
+    /// memory (though memory will still be freed for the individual elements of
+    /// the queue).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use hopscotch::Queue;
+    ///
+    /// let mut queue: Queue<usize, usize> = (0..10).zip(0..10).collect();
+    /// queue.clear();
+    /// assert_eq!(queue.len(), 0);
+    /// ```
+    pub fn clear(&mut self) {
+        self.first_with_tag.clear();
+        self.info.clear();
+        self.values.clear();
     }
 
     /// The index which will be assigned to the next item to be added to the
@@ -405,25 +526,6 @@ impl<K: IsEnabled + Eq + Hash + Clone, T> Queue<K, T> {
         self.get_mut(self.next_index().saturating_sub(1))
     }
 
-    /// Clear the contents of the queue without de-allocating the queue's
-    /// memory (though memory will still be freed for the individual elements of
-    /// the queue).
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use hopscotch::Queue;
-    ///
-    /// let mut queue: Queue<usize, usize> = (0..10).zip(0..10).collect();
-    /// queue.clear();
-    /// assert_eq!(queue.len(), 0);
-    /// ```
-    pub fn clear(&mut self) {
-        self.first_with_tag.clear();
-        self.info.clear();
-        self.values.clear();
-    }
-
     /// Returns `true` if and only if the queue contains an item whose value is
     /// equal to the given value.
     ///
@@ -460,27 +562,6 @@ impl<K: IsEnabled + Eq + Hash + Clone, T> Queue<K, T> {
     /// ```
     pub fn contains_tag(&self, t: &K) -> bool {
         self.first_with_tag.contains_key(t)
-    }
-
-    /// Shrink the memory used by the queues in this queue as much as possible.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use hopscotch::Queue;
-    ///
-    /// let mut queue: Queue<usize, ()> = Queue::new();
-    /// for _ in 0 .. 10_000 {
-    ///     queue.push(0, ());
-    /// }
-    /// for _ in 0 .. 10_000 {
-    ///     queue.pop();
-    /// }
-    /// queue.shrink_to_fit();
-    /// ```
-    pub fn shrink_to_fit(&mut self) {
-        self.info.shrink_to_fit();
-        self.values.shrink_to_fit();
     }
 
     /// Get a reference to the earliest item *exactly at* `index`.
@@ -818,96 +899,25 @@ impl<K: IsEnabled + Eq + Hash + Clone, T> Queue<K, T> {
         Some(ItemMut{value, tag, index})
     }
 
-    /// Pop an item off the back of the queue and return it.
+    /// Shrink the memory used by the queues in this queue as much as possible.
     ///
     /// # Examples
     ///
     /// ```
     /// use hopscotch::Queue;
     ///
-    /// # fn main() -> Result<(), ()> { (|| {
-    /// let mut queue: Queue<usize, String> = Queue::new();
-    /// queue.push(42, "Hello!".to_string());
-    /// let item = queue.pop()?;
-    ///
-    /// assert_eq!(item.index, 0);
-    /// assert_eq!(item.tag, 42);
-    /// assert_eq!(item.value, "Hello!");
-    /// # Some(()) })().map_or_else(|| Err(()), Ok) }
+    /// let mut queue: Queue<usize, ()> = Queue::new();
+    /// for _ in 0 .. 10_000 {
+    ///     queue.push(0, ());
+    /// }
+    /// for _ in 0 .. 10_000 {
+    ///     queue.pop();
+    /// }
+    /// queue.shrink_to_fit();
     /// ```
-    pub fn pop(&mut self) -> Option<Popped<K, T>> {
-        // The index of the thing that's about to get popped is equal to
-        // the current offset, because the offset is incremented exactly
-        // every time something is popped:
-        let popped_index = self.offset;
-        // Pop off the least recent item:
-        let popped_info = self.info.pop_front()?;
-        let popped_value = self.values.pop_front()?;
-        // Decrement the forward distance for first_with_tag of every event tag
-        // *except* the current, which should be set to the distance of the next
-        // of that tag
-        let next_index_with_tag =
-            popped_index.saturating_add(popped_info.next_with_tag as u64);
-        if next_index_with_tag == u64::max_value() {
-            self.first_with_tag.remove(&popped_info.tag)
-                .expect("Queue invariant violation: no first_with_tag for extant tag");
-        } else {
-            let earliest_index =
-                self.first_with_tag.get_mut(&popped_info.tag)
-                .expect("Queue invariant violation: no first_with_tag for extant tag");
-            *earliest_index = next_index_with_tag;
-        }
-        // Bump the offset because we just shifted the queue
-        self.offset = self.offset.checked_add(1).expect("Queue index overflow");
-        // Return the pieces
-        Some(Popped {
-            value: popped_value,
-            tag: popped_info.tag,
-            index: popped_index,
-        })
-    }
-
-    /// Push a new item into the queue, returning its assigned index.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use hopscotch::Queue;
-    ///
-    /// let mut queue: Queue<usize, String> = Queue::new();
-    /// queue.push(0, "Hello!".to_string());
-    /// ```
-    pub fn push(&mut self, tag: K, value: T) -> u64 {
-        // The index we're about to push
-        let pushed_index = self.next_index();
-        let mut previous_with_tag =
-            self.info.back()
-            .map(|latest| latest.previous_with_tag.clone())
-            .unwrap_or_else(|| HashMap::with_hasher(BuildHasherDefault::default()));
-        // Set the next_with_tag index of the previous of this tag to point to
-        // the index we're about to insert at.
-        previous_with_tag.get(&tag)
-            .map(|previous_index| {
-                self.info_mut(*previous_index).map(|previous_info| {
-                    let distance =
-                        (pushed_index - previous_index).try_into()
-                        .expect("Queue invariant violation: distance greater than usize::max_value()");
-                    previous_info.next_with_tag = distance;
-                });
-            });
-        // Actually insert the item into the queue
-        previous_with_tag.insert(tag.clone(), pushed_index);
-        self.info.push_back(Info {
-            tag: tag.clone(),
-            previous_with_tag,
-            next_with_tag: usize::max_value(),
-        });
-        self.values.push_back(value);
-        // Make sure first_with_tag tracks this event, if it is the current
-        // earliest of its tag:
-        self.first_with_tag.entry(tag).or_insert(pushed_index);
-        // Return the new index
-        pushed_index
+    pub fn shrink_to_fit(&mut self) {
+        self.info.shrink_to_fit();
+        self.values.shrink_to_fit();
     }
 
     /// Get an iterator of immutable items matching any of the given tags, whose
