@@ -8,7 +8,6 @@ readme = "README.md"
 homepage = "http://www.github.com/kwf/hopscotch"
 repository = "http://www.github.com/kwf/hopscotch"
 license = "MIT"
-license-file = "LICENSE"
 keywords = ["queue", "data-structure", "data-structures"]
 
 
