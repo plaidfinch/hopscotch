@@ -92,7 +92,10 @@ enum Operation<T> {
     Len,
     Clear,
     NextIndex,
-    FirstIndex,
+    Earliest,
+    EarliestMutAndSet(T),
+    Latest,
+    LatestMutAndSet(T),
     ShrinkToFit,
     Get(u64),
     GetMutAndSet(u64, T),
@@ -107,20 +110,23 @@ enum Operation<T> {
 impl<T: Arbitrary> Arbitrary for Operation<T> {
     fn arbitrary<G: Gen>(g: &mut G) -> Self {
         use Operation::*;
-        match usize::arbitrary(g) % 13 {
+        match usize::arbitrary(g) % 16 {
             0 => Len,
             1 => Clear,
             2 => NextIndex,
-            3 => FirstIndex,
-            4 => ShrinkToFit,
-            5 => Get(u64::arbitrary(g)),
-            6 => GetMutAndSet(u64::arbitrary(g), T::arbitrary(g)),
-            7 => After(u64::arbitrary(g), Vec::arbitrary(g)),
-            8 => AfterMutAndSet(u64::arbitrary(g), Vec::arbitrary(g), T::arbitrary(g)),
-            9 => Before(u64::arbitrary(g), Vec::arbitrary(g)),
-            10 => BeforeMutAndSet(u64::arbitrary(g), Vec::arbitrary(g), T::arbitrary(g)),
-            11 => Push(usize::arbitrary(g), T::arbitrary(g)),
-            12 => Pop,
+            3 => Earliest,
+            4 => EarliestMutAndSet(T::arbitrary(g)),
+            5 => Latest,
+            6 => LatestMutAndSet(T::arbitrary(g)),
+            7 => ShrinkToFit,
+            8 => Get(u64::arbitrary(g)),
+            9 => GetMutAndSet(u64::arbitrary(g), T::arbitrary(g)),
+            10 => After(u64::arbitrary(g), Vec::arbitrary(g)),
+            11 => AfterMutAndSet(u64::arbitrary(g), Vec::arbitrary(g), T::arbitrary(g)),
+            12 => Before(u64::arbitrary(g), Vec::arbitrary(g)),
+            13 => BeforeMutAndSet(u64::arbitrary(g), Vec::arbitrary(g), T::arbitrary(g)),
+            14 => Push(usize::arbitrary(g), T::arbitrary(g)),
+            15 => Pop,
             _ => panic!("Bad discriminant while generating operation!"),
         }
     }
@@ -131,8 +137,13 @@ impl<T: Arbitrary> Arbitrary for Operation<T> {
             Len => Box::new(iter::empty()),
             Clear => Box::new(iter::empty()),
             NextIndex => Box::new(iter::empty()),
-            FirstIndex => Box::new(iter::empty()),
+            Earliest => Box::new(iter::empty()),
+            Latest => Box::new(iter::empty()),
             ShrinkToFit => Box::new(iter::empty()),
+            EarliestMutAndSet(new) =>
+                Box::new(new.shrink().map(EarliestMutAndSet)),
+            LatestMutAndSet(new) =>
+                Box::new(new.shrink().map(LatestMutAndSet)),
             Get(index) => Box::new(index.shrink().map(Get)),
             GetMutAndSet(index, new) =>
                 Box::new((index.clone(), new.clone()).shrink()
@@ -190,7 +201,16 @@ fn simulate<T: Eq + Clone + Debug>(
             complex.clear();
         },
         NextIndex => return simple.next_index() == complex.next_index(),
-        FirstIndex => return simple.first_index() == complex.first_index(),
+        Earliest => {
+            let s = simple.earliest();
+            let c = complex.earliest();
+            return s == c.map(hopscotch::Item::into);
+        },
+        Latest => {
+            let s = simple.latest();
+            let c = complex.latest();
+            return s == c.map(hopscotch::Item::into);
+        },
         ShrinkToFit => {
             simple.shrink_to_fit();
             complex.shrink_to_fit();
@@ -209,6 +229,26 @@ fn simulate<T: Eq + Clone + Debug>(
             let s = simple.before(index, &tags);
             let c = complex.before(index, &tags);
             return s == c.map(hopscotch::Item::into);
+        },
+        EarliestMutAndSet(new) => {
+            match (simple.earliest_mut(), complex.earliest_mut()) {
+                (None, None) => { },
+                (Some(mut s), Some(mut c)) => {
+                    *s.as_mut() = new.clone();
+                    *c.as_mut() = new;
+                },
+                _ => return false,
+            }
+        },
+        LatestMutAndSet(new) => {
+            match (simple.latest_mut(), complex.latest_mut()) {
+                (None, None) => { },
+                (Some(mut s), Some(mut c)) => {
+                    *s.as_mut() = new.clone();
+                    *c.as_mut() = new;
+                },
+                _ => return false,
+            }
         },
         GetMutAndSet(index, new) => {
             match (simple.get_mut(index), complex.get_mut(index)) {
@@ -344,8 +384,26 @@ mod simple {
                 .expect("Queue index overflow")
         }
 
-        pub fn first_index(&self) -> u64 {
-            self.offset
+        pub fn earliest(&self) -> Option<Item<&T>> {
+            let (tag, value) = self.inner.front()?;
+            Some(Item{index: self.offset, tag: *tag, value})
+        }
+
+        pub fn earliest_mut(&mut self) -> Option<Item<&mut T>> {
+            let (tag, value) = self.inner.front_mut()?;
+            Some(Item{index: self.offset, tag: *tag, value})
+        }
+
+        pub fn latest(&self) -> Option<Item<&T>> {
+            let index = self.offset.checked_add(self.len().checked_sub(1)? as u64)?;
+            let (tag, value) = self.inner.back()?;
+            Some(Item{index, tag: *tag, value})
+        }
+
+        pub fn latest_mut(&mut self) -> Option<Item<&mut T>> {
+            let index = self.offset.checked_add(self.len().checked_sub(1)? as u64)?;
+            let (tag, value) = self.inner.back_mut()?;
+            Some(Item{index, tag: *tag, value})
         }
 
         pub fn shrink_to_fit(&mut self) {
@@ -365,7 +423,7 @@ mod simple {
         }
 
         pub fn after(&self, mut index: u64, tags: &[usize]) -> Option<Item<&T>> {
-            index = index.max(self.first_index());
+            index = index.max(self.offset);
             loop {
                 let item = self.get(index)?;
                 if tags.contains(&item.tag()) {
@@ -376,7 +434,7 @@ mod simple {
         }
 
         pub fn after_mut(&mut self, mut index: u64, tags: &[usize]) -> Option<Item<&mut T>> {
-            index = index.max(self.first_index());
+            index = index.max(self.offset);
             loop {
                 let item = self.get(index)?;
                 if tags.contains(&item.tag()) {

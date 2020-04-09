@@ -6,7 +6,7 @@ use std::hash::{Hash, BuildHasherDefault};
 use im::hashmap::HashMap;
 use nohash_hasher::{IsEnabled, NoHashHasher};
 
-/// A `Queue` is a first-in-first-out (FIFO) queue where each item in the queue
+/// A `Queue` is a earliest-in-earliest-out (FIFO) queue where each item in the queue
 /// is additionally associated with an immutable *tag* of type `K` and a
 /// uniquely assigned sequential *index* of type `u64`. Unlike in a queue like
 /// `VecDeque`, queue operations *do not* change the `index` of items; the index
@@ -21,6 +21,12 @@ use nohash_hasher::{IsEnabled, NoHashHasher};
 /// relative to the total number of distinct tags in the queue, and constant
 /// time relative to the size of the queue and the distance between successive
 /// items of the same tag.
+///
+/// This data structure is significantly optimized for small keys. The types
+/// usable as tags are limited to: `u8, u16, u32, u64, usize, i8, i16, i32, i64,
+/// isize`, or any third-party types which are instances of the `nohash-hasher`
+/// crate's `IsEnabled` trait. In practice, it's usually the right choice to
+/// just pick one of these tag types, or a newtype thereof.
 #[derive(Debug, Clone)]
 pub struct Queue<K: IsEnabled + Eq + Hash + Clone, T> {
     offset: u64,
@@ -175,7 +181,7 @@ macro_rules! after_impl {
             if index >= this.next_index() {
                 return None;
             }
-            let here_index = index.max(this.first_index());
+            let here_index = index.max(this.earliest_index());
             let here = this.info(here_index);
 
             let mut minimum: Option<u64> = None;
@@ -197,11 +203,11 @@ macro_rules! after_impl {
                         };
                     minimum = match (minimum, next_index) {
                         (None, Some(next_index))
-                            if this.first_index() <= next_index => {
+                            if this.earliest_index() <= next_index => {
                                 Some(next_index)
                             },
                         (Some(min), Some(next_index))
-                            if this.first_index() <= next_index && next_index < min => {
+                            if this.earliest_index() <= next_index && next_index < min => {
                                 Some(next_index)
                             },
                         _ => minimum,
@@ -229,10 +235,12 @@ impl<K: IsEnabled + Eq + Hash + Clone, T> Queue<K, T> {
         index.checked_sub(self.offset)?.try_into().ok()
     }
 
+    /// Get the internal info at a given external index.
     fn info(&self, index: u64) -> Option<&Info<K>> {
         self.info.get(self.as_internal_index(index)?)
     }
 
+    /// Get the internal info (mutably) at a given external index.
     fn info_mut(&mut self, index: u64) -> Option<&mut Info<K>> {
         self.info.get_mut(self.as_internal_index(index)?)
     }
@@ -304,21 +312,84 @@ impl<K: IsEnabled + Eq + Hash + Clone, T> Queue<K, T> {
             .expect("Queue index overflow")
     }
 
-    /// The first index which is still stored in the queue (each `pop`
+    /// The earliest index which is still stored in the queue (each `pop`
     /// increments this value by 1).
+    fn earliest_index(&self) -> u64 {
+        self.offset
+    }
+
+    /// Get an immutable reference to the earliest item to have been inserted
+    /// into the queue, which is still in the queue.
     ///
     /// # Examples
     ///
     /// ```
     /// use hopscotch::Queue;
     ///
+    /// # fn main() -> Result<(), ()> { (|| {
     /// let mut queue: Queue<usize, usize> = (0..10).zip(0..10).collect();
     /// queue.pop();
     /// queue.pop();
-    /// assert_eq!(queue.first_index(), 2);
+    /// assert_eq!(*queue.earliest()?.value(), 2);
+    /// # Some(()) })().map_or_else(|| Err(()), Ok) }
     /// ```
-    pub fn first_index(&self) -> u64 {
-        self.offset
+    pub fn earliest(&self) -> Option<Item<K, T>> {
+        self.get(self.earliest_index())
+    }
+
+    /// Get an immutable reference to the earliest item to have been inserted
+    /// into the queue, which is still in the queue.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use hopscotch::Queue;
+    ///
+    /// # fn main() -> Result<(), ()> { (|| {
+    /// let mut queue: Queue<usize, usize> = (0..10).zip(0..10).collect();
+    /// queue.pop();
+    /// queue.pop();
+    /// *queue.earliest_mut()?.value_mut() = 500;
+    /// assert_eq!(*queue.earliest()?.value(), 500);
+    /// # Some(()) })().map_or_else(|| Err(()), Ok) }
+    /// ```
+    pub fn earliest_mut(&mut self) -> Option<ItemMut<K, T>> {
+        self.get_mut(self.earliest_index())
+    }
+
+    /// Get an immutable reference to the latest item to have been inserted
+    /// into the queue.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use hopscotch::Queue;
+    ///
+    /// # fn main() -> Result<(), ()> { (|| {
+    /// let mut queue: Queue<usize, usize> = (0..10).zip(0..10).collect();
+    /// assert_eq!(*queue.latest()?.value(), 9);
+    /// # Some(()) })().map_or_else(|| Err(()), Ok) }
+    /// ```
+    pub fn latest(&self) -> Option<Item<K, T>> {
+        self.get(self.next_index().saturating_sub(1))
+    }
+
+    /// Get an immutable reference to the earliest item to have been inserted
+    /// into the queue, which is still in the queue.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use hopscotch::Queue;
+    ///
+    /// # fn main() -> Result<(), ()> { (|| {
+    /// let mut queue: Queue<usize, usize> = (0..10).zip(0..10).collect();
+    /// *queue.latest_mut()?.value_mut() = 500;
+    /// assert_eq!(*queue.latest()?.value(), 500);
+    /// # Some(()) })().map_or_else(|| Err(()), Ok) }
+    /// ```
+    pub fn latest_mut(&mut self) -> Option<ItemMut<K, T>> {
+        self.get_mut(self.next_index().saturating_sub(1))
     }
 
     /// Clear the contents of the queue without de-allocating the queue's
@@ -341,24 +412,37 @@ impl<K: IsEnabled + Eq + Hash + Clone, T> Queue<K, T> {
     }
 
     /// Shrink the memory used by the queues in this queue as much as possible.
-    /// This is less expensive than `shrink_all_to_fit`, but does not reclaim
-    /// excess memory used by items within the queue. Note that such
-    /// excessively-sized items in the queue can only be produced using
-    /// `push_and_pop`, so it is usually sufficient to use this method.
-    pub fn shrink_to_fit(&mut self) {
-        self.info.shrink_to_fit();
-        self.values.shrink_to_fit();
-    }
-
-    /// Get a reference to the first item *exactly at* `index`.
     ///
     /// # Examples
     ///
     /// ```
     /// use hopscotch::Queue;
     ///
+    /// let mut queue: Queue<usize, ()> = Queue::new();
+    /// for _ in 0 .. 10_000 {
+    ///     queue.push(0, ());
+    /// }
+    /// for _ in 0 .. 10_000 {
+    ///     queue.pop();
+    /// }
+    /// queue.shrink_to_fit();
+    /// ```
+    pub fn shrink_to_fit(&mut self) {
+        self.info.shrink_to_fit();
+        self.values.shrink_to_fit();
+    }
+
+    /// Get a reference to the earliest item *exactly at* `index`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use hopscotch::Queue;
+    ///
+    /// # fn main() -> Result<(), ()> { (|| {
     /// let mut queue: Queue<usize, usize> = (0..10).zip(0..10).collect();
-    /// assert_eq!(*queue.get(0).unwrap().as_ref(), 0);
+    /// assert_eq!(*queue.get(0)?.as_ref(), 0);
+    /// # Some(()) })().map_or_else(|| Err(()), Ok) }
     /// ```
     ///
     /// As noted elsewhere, if we `pop` off this value, the index we
@@ -376,16 +460,18 @@ impl<K: IsEnabled + Eq + Hash + Clone, T> Queue<K, T> {
         Some(Item{value, tag, index})
     }
 
-    /// Get a mutable reference to the first item *exactly at* `index`.
+    /// Get a mutable reference to the earliest item *exactly at* `index`.
     ///
     /// # Examples
     ///
     /// ```
+    /// # fn main() -> Result<(), ()> { (|| {
     /// # use hopscotch::Queue;
     /// let mut queue: Queue<usize, usize> = (0..10).zip(0..10).collect();
-    /// let mut n = queue.get_mut(0).unwrap();
+    /// let mut n = queue.get_mut(0)?;
     /// *n.as_mut() = 5000;
-    /// assert_eq!(*queue.get(0).unwrap().as_ref(), 5000);
+    /// assert_eq!(*queue.get(0)?.as_ref(), 5000);
+    /// # Some(()) })().map_or_else(|| Err(()), Ok) }
     /// ```
     ///
     /// As noted elsewhere, if we `pop` off this value, the index we
@@ -403,7 +489,7 @@ impl<K: IsEnabled + Eq + Hash + Clone, T> Queue<K, T> {
         Some(ItemMut{value, tag, index})
     }
 
-    /// Get a reference to the first item after or including `index` whose tag
+    /// Get a reference to the earliest item after or including `index` whose tag
     /// is one of those given.
     ///
     /// # Examples
@@ -421,62 +507,70 @@ impl<K: IsEnabled + Eq + Hash + Clone, T> Queue<K, T> {
     ///          (1, "le monde!".to_string())].into_iter().collect();
     /// ```
     ///
-    /// Starting from index 0, the first word tagged as English is "Hello"; the
-    /// first tagged as French is "Bonjour"; the first tagged as either is
+    /// Starting from index 0, the earliest word tagged as English is "Hello"; the
+    /// earliest tagged as French is "Bonjour"; the earliest tagged as either is
     /// "Hello":
     ///
     /// ```
     /// # use hopscotch::Queue;
+    /// # fn main() -> Result<(), ()> { (|| {
     /// # let mut queue: Queue<usize, String> =
     /// #   vec![(0, "Hello".to_string()),
     /// #        (1, "Bonjour".to_string()),
     /// #        (0, "world!".to_string()),
     /// #        (1, "le monde!".to_string())].into_iter().collect();
-    /// assert_eq!(queue.after(0, &[0]).unwrap().as_ref(), "Hello");
-    /// assert_eq!(queue.after(0, &[1]).unwrap().as_ref(), "Bonjour");
-    /// assert_eq!(queue.after(0, &[0, 1]).unwrap().as_ref(), "Hello");
+    /// assert_eq!(queue.after(0, &[0])?.as_ref(), "Hello");
+    /// assert_eq!(queue.after(0, &[1])?.as_ref(), "Bonjour");
+    /// assert_eq!(queue.after(0, &[0, 1])?.as_ref(), "Hello");
+    /// # Some(()) })().map_or_else(|| Err(()), Ok) }
     /// ```
     ///
     /// Starting *inclusively after* index 1:
     ///
     /// ```
     /// # use hopscotch::Queue;
+    /// # fn main() -> Result<(), ()> { (|| {
     /// # let mut queue: Queue<usize, String> =
     /// #   vec![(0, "Hello".to_string()),
     /// #        (1, "Bonjour".to_string()),
     /// #        (0, "world!".to_string()),
     /// #        (1, "le monde!".to_string())].into_iter().collect();
-    /// assert_eq!(queue.after(1, &[0]).unwrap().as_ref(), "world!");
-    /// assert_eq!(queue.after(1, &[1]).unwrap().as_ref(), "Bonjour");
-    /// assert_eq!(queue.after(1, &[0, 1]).unwrap().as_ref(), "Bonjour");
+    /// assert_eq!(queue.after(1, &[0])?.as_ref(), "world!");
+    /// assert_eq!(queue.after(1, &[1])?.as_ref(), "Bonjour");
+    /// assert_eq!(queue.after(1, &[0, 1])?.as_ref(), "Bonjour");
+    /// # Some(()) })().map_or_else(|| Err(()), Ok) }
     /// ```
     ///
     /// Starting *inclusively after* index 2:
     ///
     /// ```
     /// # use hopscotch::Queue;
+    /// # fn main() -> Result<(), ()> { (|| {
     /// # let mut queue: Queue<usize, String> =
     /// #   vec![(0, "Hello".to_string()),
     /// #        (1, "Bonjour".to_string()),
     /// #        (0, "world!".to_string()),
     /// #        (1, "le monde!".to_string())].into_iter().collect();
-    /// assert_eq!(queue.after(2, &[0]).unwrap().as_ref(), "world!");
-    /// assert_eq!(queue.after(2, &[1]).unwrap().as_ref(), "le monde!");
-    /// assert_eq!(queue.after(2, &[0, 1]).unwrap().as_ref(), "world!");
+    /// assert_eq!(queue.after(2, &[0])?.as_ref(), "world!");
+    /// assert_eq!(queue.after(2, &[1])?.as_ref(), "le monde!");
+    /// assert_eq!(queue.after(2, &[0, 1])?.as_ref(), "world!");
+    /// # Some(()) })().map_or_else(|| Err(()), Ok) }
     /// ```
     ///
     /// Starting *inclusively after* index 3:
     ///
     /// ```
     /// # use hopscotch::Queue;
+    /// # fn main() -> Result<(), ()> { (|| {
     /// # let mut queue: Queue<usize, String> =
     /// #   vec![(0, "Hello".to_string()),
     /// #        (1, "Bonjour".to_string()),
     /// #        (0, "world!".to_string()),
     /// #        (1, "le monde!".to_string())].into_iter().collect();
     /// assert!(queue.after(3, &[0]).is_none());
-    /// assert_eq!(queue.after(3, &[1]).unwrap().as_ref(), "le monde!");
-    /// assert_eq!(queue.after(3, &[0, 1]).unwrap().as_ref(), "le monde!");
+    /// assert_eq!(queue.after(3, &[1])?.as_ref(), "le monde!");
+    /// assert_eq!(queue.after(3, &[0, 1])?.as_ref(), "le monde!");
+    /// # Some(()) })().map_or_else(|| Err(()), Ok) }
     /// ```
     ///
     /// Starting *inclusively after* index 4:
@@ -497,7 +591,7 @@ impl<K: IsEnabled + Eq + Hash + Clone, T> Queue<K, T> {
         Some(Item{value, tag, index})
     }
 
-    /// Get a mutable reference to the first item after or including `index`
+    /// Get a mutable reference to the earliest item after or including `index`
     /// whose tag is one of those given.
     ///
     /// This uses the same semantics for lookup as `after`: see its
@@ -512,6 +606,7 @@ impl<K: IsEnabled + Eq + Hash + Clone, T> Queue<K, T> {
     /// ```
     /// use hopscotch::Queue;
     ///
+    /// # fn main() -> Result<(), ()> { (|| {
     /// let mut queue: Queue<usize, String> =
     ///     vec![(0, "Hello".to_string()),
     ///          (1, "Bonjour".to_string()),
@@ -519,11 +614,12 @@ impl<K: IsEnabled + Eq + Hash + Clone, T> Queue<K, T> {
     ///          (1, "le monde!".to_string())].into_iter().collect();
     ///
     /// let beginning = 0; // same start index for both calls to `after_mut`
-    /// *queue.after_mut(beginning, &[0]).unwrap().as_mut() = "Goodbye".to_string();
-    /// *queue.after_mut(beginning, &[1]).unwrap().as_mut() = "Au revoir".to_string();
+    /// *queue.after_mut(beginning, &[0])?.as_mut() = "Goodbye".to_string();
+    /// *queue.after_mut(beginning, &[1])?.as_mut() = "Au revoir".to_string();
     ///
-    /// assert_eq!(queue.get(0).unwrap().as_ref(), "Goodbye");
-    /// assert_eq!(queue.get(1).unwrap().as_ref(), "Au revoir");
+    /// assert_eq!(queue.get(0)?.as_ref(), "Goodbye");
+    /// assert_eq!(queue.get(1)?.as_ref(), "Au revoir");
+    /// # Some(()) })().map_or_else(|| Err(()), Ok) }
     /// ```
     pub fn after_mut(&mut self, index: u64, tags: &[K]) -> Option<ItemMut<K, T>> {
         let (value, tag, index) = after_impl!(self, index, tags, mut)?;
@@ -549,20 +645,22 @@ impl<K: IsEnabled + Eq + Hash + Clone, T> Queue<K, T> {
     ///          (1, "le monde!".to_string())].into_iter().collect();
     /// ```
     ///
-    /// Starting from index 4 (which is after the end of the queue), the last
-    /// word tagged as English is "world!"; the last tagged as French is "le
-    /// monde!"; the last tagged as either is "le monde!":
+    /// Starting from index 4 (which is after the end of the queue), the latest
+    /// word tagged as English is "world!"; the latest tagged as French is "le
+    /// monde!"; the latest tagged as either is "le monde!":
     ///
     /// ```
     /// # use hopscotch::Queue;
+    /// # fn main() -> Result<(), ()> { (|| {
     /// # let mut queue: Queue<usize, String> =
     /// #   vec![(0, "Hello".to_string()),
     /// #        (1, "Bonjour".to_string()),
     /// #        (0, "world!".to_string()),
     /// #        (1, "le monde!".to_string())].into_iter().collect();
-    /// assert_eq!(queue.before(4, &[0]).unwrap().as_ref(), "world!");
-    /// assert_eq!(queue.before(4, &[1]).unwrap().as_ref(), "le monde!");
-    /// assert_eq!(queue.before(4, &[0, 1]).unwrap().as_ref(), "le monde!");
+    /// assert_eq!(queue.before(4, &[0])?.as_ref(), "world!");
+    /// assert_eq!(queue.before(4, &[1])?.as_ref(), "le monde!");
+    /// assert_eq!(queue.before(4, &[0, 1])?.as_ref(), "le monde!");
+    /// # Some(()) })().map_or_else(|| Err(()), Ok) }
     /// ```
     ///
     /// Starting *inclusively before* index 3 (the end of the queue), we get
@@ -570,56 +668,64 @@ impl<K: IsEnabled + Eq + Hash + Clone, T> Queue<K, T> {
     ///
     /// ```
     /// # use hopscotch::Queue;
+    /// # fn main() -> Result<(), ()> { (|| {
     /// # let mut queue: Queue<usize, String> =
     /// #   vec![(0, "Hello".to_string()),
     /// #        (1, "Bonjour".to_string()),
     /// #        (0, "world!".to_string()),
     /// #        (1, "le monde!".to_string())].into_iter().collect();
-    /// assert_eq!(queue.before(3, &[0]).unwrap().as_ref(), "world!");
-    /// assert_eq!(queue.before(3, &[1]).unwrap().as_ref(), "le monde!");
-    /// assert_eq!(queue.before(3, &[0, 1]).unwrap().as_ref(), "le monde!");
+    /// assert_eq!(queue.before(3, &[0])?.as_ref(), "world!");
+    /// assert_eq!(queue.before(3, &[1])?.as_ref(), "le monde!");
+    /// assert_eq!(queue.before(3, &[0, 1])?.as_ref(), "le monde!");
+    /// # Some(()) })().map_or_else(|| Err(()), Ok) }
     /// ```
     ///
     /// Starting *inclusively before* index 2:
     ///
     /// ```
     /// # use hopscotch::Queue;
+    /// # fn main() -> Result<(), ()> { (|| {
     /// # let mut queue: Queue<usize, String> =
     /// #   vec![(0, "Hello".to_string()),
     /// #        (1, "Bonjour".to_string()),
     /// #        (0, "world!".to_string()),
     /// #        (1, "le monde!".to_string())].into_iter().collect();
-    /// assert_eq!(queue.before(2, &[0]).unwrap().as_ref(), "world!");
-    /// assert_eq!(queue.before(2, &[1]).unwrap().as_ref(), "Bonjour");
-    /// assert_eq!(queue.before(2, &[0, 1]).unwrap().as_ref(), "world!");
+    /// assert_eq!(queue.before(2, &[0])?.as_ref(), "world!");
+    /// assert_eq!(queue.before(2, &[1])?.as_ref(), "Bonjour");
+    /// assert_eq!(queue.before(2, &[0, 1])?.as_ref(), "world!");
+    /// # Some(()) })().map_or_else(|| Err(()), Ok) }
     /// ```
     ///
     /// Starting *inclusively before* index 1:
     ///
     /// ```
     /// # use hopscotch::Queue;
+    /// # fn main() -> Result<(), ()> { (|| {
     /// # let mut queue: Queue<usize, String> =
     /// #   vec![(0, "Hello".to_string()),
     /// #        (1, "Bonjour".to_string()),
     /// #        (0, "world!".to_string()),
     /// #        (1, "le monde!".to_string())].into_iter().collect();
-    /// assert_eq!(queue.before(1, &[0]).unwrap().as_ref(), "Hello");
-    /// assert_eq!(queue.before(1, &[1]).unwrap().as_ref(), "Bonjour");
-    /// assert_eq!(queue.before(1, &[0, 1]).unwrap().as_ref(), "Bonjour");
+    /// assert_eq!(queue.before(1, &[0])?.as_ref(), "Hello");
+    /// assert_eq!(queue.before(1, &[1])?.as_ref(), "Bonjour");
+    /// assert_eq!(queue.before(1, &[0, 1])?.as_ref(), "Bonjour");
+    /// # Some(()) })().map_or_else(|| Err(()), Ok) }
     /// ```
     ///
     /// Starting *inclusively before* index 0:
     ///
     /// ```
     /// # use hopscotch::Queue;
+    /// # fn main() -> Result<(), ()> { (|| {
     /// # let mut queue: Queue<usize, String> =
     /// #   vec![(0, "Hello".to_string()),
     /// #        (1, "Bonjour".to_string()),
     /// #        (0, "world!".to_string()),
     /// #        (1, "le monde!".to_string())].into_iter().collect();
-    /// assert_eq!(queue.before(0, &[0]).unwrap().as_ref(), "Hello");
+    /// assert_eq!(queue.before(0, &[0])?.as_ref(), "Hello");
     /// assert!(queue.before(0, &[1]).is_none());
-    /// assert_eq!(queue.before(0, &[0, 1]).unwrap().as_ref(), "Hello");
+    /// assert_eq!(queue.before(0, &[0, 1])?.as_ref(), "Hello");
+    /// # Some(()) })().map_or_else(|| Err(()), Ok) }
     /// ```
     pub fn before(&self, index: u64, tags: &[K]) -> Option<Item<K, T>> {
         let (value, tag, index) = before_impl!(self, index, tags)?;
@@ -641,6 +747,7 @@ impl<K: IsEnabled + Eq + Hash + Clone, T> Queue<K, T> {
     /// ```
     /// use hopscotch::Queue;
     ///
+    /// # fn main() -> Result<(), ()> { (|| {
     /// let mut queue: Queue<usize, String> =
     ///     vec![(0, "Hello".to_string()),
     ///          (1, "Bonjour".to_string()),
@@ -648,11 +755,12 @@ impl<K: IsEnabled + Eq + Hash + Clone, T> Queue<K, T> {
     ///          (1, "le monde!".to_string())].into_iter().collect();
     ///
     /// let end = 5; // same end index for both calls to `after_mut`
-    /// *queue.before_mut(end, &[0]).unwrap().as_mut() = "my friends!".to_string();
-    /// *queue.before_mut(end, &[1]).unwrap().as_mut() = "mes amis!".to_string();
+    /// *queue.before_mut(end, &[0])?.as_mut() = "my friends!".to_string();
+    /// *queue.before_mut(end, &[1])?.as_mut() = "mes amis!".to_string();
     ///
-    /// assert_eq!(queue.get(2).unwrap().as_ref(), "my friends!");
-    /// assert_eq!(queue.get(3).unwrap().as_ref(), "mes amis!");
+    /// assert_eq!(queue.get(2)?.as_ref(), "my friends!");
+    /// assert_eq!(queue.get(3)?.as_ref(), "mes amis!");
+    /// # Some(()) })().map_or_else(|| Err(()), Ok) }
     /// ```
     pub fn before_mut(&mut self, index: u64, tags: &[K]) -> Option<ItemMut<K, T>> {
         let (value, tag, index) = before_impl!(self, index, tags, mut)?;
@@ -666,13 +774,15 @@ impl<K: IsEnabled + Eq + Hash + Clone, T> Queue<K, T> {
     /// ```
     /// use hopscotch::Queue;
     ///
+    /// # fn main() -> Result<(), ()> { (|| {
     /// let mut queue: Queue<usize, String> = Queue::new();
     /// queue.push(42, "Hello!".to_string());
-    /// let item = queue.pop().unwrap();
+    /// let item = queue.pop()?;
     ///
     /// assert_eq!(item.index, 0);
     /// assert_eq!(item.tag, 42);
     /// assert_eq!(item.value, "Hello!");
+    /// # Some(()) })().map_or_else(|| Err(()), Ok) }
     /// ```
     pub fn pop(&mut self) -> Option<Popped<K, T>> {
         // The index of the thing that's about to get popped is equal to
@@ -691,10 +801,10 @@ impl<K: IsEnabled + Eq + Hash + Clone, T> Queue<K, T> {
             self.first_with_tag.remove(&popped_info.tag)
                 .expect("Queue invariant violation: no first_with_tag for extant tag");
         } else {
-            let first_index =
+            let earliest_index =
                 self.first_with_tag.get_mut(&popped_info.tag)
                 .expect("Queue invariant violation: no first_with_tag for extant tag");
-            *first_index = next_index_with_tag;
+            *earliest_index = next_index_with_tag;
         }
         // Bump the offset because we just shifted the queue
         self.offset = self.offset.checked_add(1).expect("Queue index overflow");
@@ -743,7 +853,7 @@ impl<K: IsEnabled + Eq + Hash + Clone, T> Queue<K, T> {
         });
         self.values.push_back(value);
         // Make sure first_with_tag tracks this event, if it is the current
-        // first of its tag:
+        // earliest of its tag:
         self.first_with_tag.entry(tag).or_insert(pushed_index);
         // Return the new index
         pushed_index
@@ -785,7 +895,7 @@ impl<K: IsEnabled + Eq + Hash + Clone, T> Queue<K, T> {
         tags: Option<&'b [K]>,
     ) -> Iter<'a, 'b, K, T> {
         let head = Some(self.next_index().saturating_sub(1).min(latest));
-        let tail = Some(self.first_index().max(earliest));
+        let tail = Some(self.earliest_index().max(earliest));
         Iter{inner: self, tags, head, tail}
     }
 
@@ -824,7 +934,7 @@ impl<K: IsEnabled + Eq + Hash + Clone, T> Queue<K, T> {
         tags: Option<&'b [K]>,
     ) -> IterMut<'a, 'b, K, T> {
         let head = Some(self.next_index().saturating_sub(1).min(latest));
-        let tail = Some(self.first_index().max(earliest));
+        let tail = Some(self.earliest_index().max(earliest));
         IterMut{inner: self, tags, head, tail}
     }
 }
@@ -955,105 +1065,3 @@ impl<'a, 'b, K: IsEnabled + Eq + Hash + Clone, T> DoubleEndedIterator for IterMu
         })
     }
 }
-
-/*
-impl<T: std::fmt::Display> std::fmt::Display for Queue<K, T> {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        let max_spaces = format!(
-            "{}",
-            self.first_with_tag
-                .values()
-                .filter(|x| **x != usize::max_value())
-                .max()
-                .unwrap_or(&0)
-                .max(
-                    &self
-                        .info
-                        .iter()
-                        .map(|i| {
-                            (if i.next_with_tag == usize::max_value() {
-                                0
-                            } else {
-                                i.next_with_tag
-                            })
-                            .max(
-                                *i.previous_with_tag
-                                    .values()
-                                    .filter(|x| **x != usize::max_value())
-                                    .max()
-                                    .unwrap_or(&0),
-                            )
-                        })
-                        .max()
-                        .unwrap_or(0)
-                )
-        )
-        .len();
-        let max_width = self
-            .info
-            .iter()
-            .map(|i| i.previous_with_tag.len())
-            .max()
-            .unwrap_or(0);
-        let spaces = |f: &mut std::fmt::Formatter, s: String| {
-            write!(f, "{}", s)?;
-            for _ in 0..max_spaces.saturating_sub(s.len()) {
-                write!(f, "   ")?
-            }
-            Ok(())
-        };
-        let dist = |n: usize| {
-            if n != usize::max_value() {
-                format!("{}", n)
-            } else {
-                "∞".to_string()
-            }
-        };
-        for _ in 0..max_width {
-            write!(f, " ")?;
-            spaces(f, " ↱ ".to_string())?;
-        }
-        write!(f, " →")?;
-        for t in 0..max_width {
-            if let Some(d) = self.first_with_tag.get(t) {
-                write!(f, " ")?;
-                spaces(f, format!(" ↓{}", dist(*d)))?;
-            } else {
-                write!(f, " ")?;
-                spaces(f, format!("  "))?;
-            }
-        }
-        for (i, value) in self.info.iter().zip(self.values.iter()) {
-            write!(f, "\n")?;
-            for t in 0..max_width {
-                if let Some(d) = i.previous_with_tag.get(t) {
-                    if *d > 0 {
-                        write!(f, " ")?;
-                        spaces(f, format!(" ↑{}", dist(*d)))?;
-                    } else {
-                        spaces(f, format!(" ({})", t))?;
-                    }
-                } else {
-                    write!(f, " ")?;
-                    spaces(f, "".to_string())?;
-                }
-            }
-            write!(f, " |")?;
-            for t in 0..max_width {
-                if let Some(d) = i.previous_with_tag.get(t) {
-                    if *d == 0 {
-                        write!(f, " ")?;
-                        spaces(f, format!(" ↓{}", dist(i.next_with_tag)))?;
-                    } else {
-                        spaces(f, "  ⋮ ".to_string())?;
-                    }
-                } else {
-                    spaces(f, "  ⋮ ".to_string())?;
-                }
-            }
-            write!(f, " | {}", value)?
-        }
-        Ok(())
-    }
-}
-*/
