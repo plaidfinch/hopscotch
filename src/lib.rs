@@ -1,25 +1,43 @@
-//! A `hopscotch::Queue` is a earliest-in-earliest-out (FIFO) queue where each
-//! item in the queue is additionally associated with an immutable *tag* of type
-//! `K` and a uniquely assigned sequential *index* of type `u64`. Unlike in a
-//! queue like `VecDeque`, queue operations *do not* change the `index` of
-//! items; the index is fixed from the time of the item's insertion to its
-//! removal, and each new inserted item is given an index one greater than that
-//! inserted before it.
+//! A [`hopscotch::Queue`](struct@Queue) is a earliest-in-earliest-out (FIFO)
+//! queue where each [`Item`](struct@Item) in the queue has
 //!
-//! In addition to supporting the ordinary `push`, `pop`, and `get` methods of a
-//! FIFO queue, a `Queue` supports the methods `after` and `before` (and their
-//! respective `mut` variants), which query the queue to determine the next item
-//! in the queue whose `tag` is any of a given set of tags. These methods run in
-//! linear time relative to the number of tags queried, logarithmic time
-//! relative to the total number of distinct tags in the queue, and constant
-//! time relative to the size of the queue and the distance between successive
-//! items of the same tag.
+//! - a [`value`](Item.value),
+//! - an immutable [`tag`](Item.tag) of type `K`, and
+//! - a unique [`index`](Item.index) of type `u64` which is assigned
+//! in sequential order of insertion starting at 0 when the queue is created.
+//!
+//! In addition to supporting the ordinary [`push`](Queue.push),
+//! [`pop`](Queue.pop), and [`get`](Queue.get) methods of a FIFO queue, a
+//! hopscotch queue also supports the methods [`after`](Queue.after) and
+//! [`before`](Queue.before) (and their respective `_mut` variants):
+//!
+//! ```
+//! # struct X;
+//! # impl X {
+//! pub fn after(&self, index: u64, tags: &[K]) -> Option<Item<K, T>>
+//! # { panic!() }
+//! pub fn before(&self, index: u64, tags: &[K]) -> Option<Item<K, T>>
+//! # { panic!() }
+//! # }
+//! ```
+//!
+//! These methods find next [`Item`] (or [`ItemMut`]) in the queue whose
+//! [`tag`](Item.tag) is equal to any of a given set of tags.
+//!
+//! These methods are the real benefit of using a hopscotch queue over another
+//! data structure. Their asymptotic time complexity is:
+//!
+//! - linear relative to the number of tags queried,
+//! - logarithmic relative to the total number of distinct tags in the queue,
+//! - constant relative to the length of the queue, and
+//! - constant relative to the distance between successive items of the same tag.
 //!
 //! This data structure is significantly optimized for small keys. The types
 //! usable as tags are limited to: `u8, u16, u32, u64, usize, i8, i16, i32, i64,
-//! isize`, or any third-party types which are instances of the `nohash-hasher`
-//! crate's `IsEnabled` trait. In practice, it's usually the right choice to
-//! just pick one of these tag types, or a newtype thereof.
+//! isize`, or any third-party types which are instances of the
+//! [`nohash-hasher`](http://crates.io/crates/nohash-hasher) crate's
+//! [`IsEnabled`] trait. In practice, it's usually the right choice to just pick
+//! one of these tag types.
 
 use std::collections::VecDeque;
 use std::convert::TryInto;
