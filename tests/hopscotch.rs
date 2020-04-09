@@ -90,6 +90,9 @@ quickcheck! {
 #[derive(Debug, Clone)]
 enum Operation<T> {
     Len,
+    IsEmpty,
+    Contains(T),
+    ContainsTag(usize),
     Clear,
     NextIndex,
     Earliest,
@@ -110,7 +113,7 @@ enum Operation<T> {
 impl<T: Arbitrary> Arbitrary for Operation<T> {
     fn arbitrary<G: Gen>(g: &mut G) -> Self {
         use Operation::*;
-        match usize::arbitrary(g) % 16 {
+        match usize::arbitrary(g) % 19 {
             0 => Len,
             1 => Clear,
             2 => NextIndex,
@@ -127,6 +130,9 @@ impl<T: Arbitrary> Arbitrary for Operation<T> {
             13 => BeforeMutAndSet(u64::arbitrary(g), Vec::arbitrary(g), T::arbitrary(g)),
             14 => Push(usize::arbitrary(g), T::arbitrary(g)),
             15 => Pop,
+            16 => Contains(T::arbitrary(g)),
+            17 => ContainsTag(usize::arbitrary(g)),
+            18 => IsEmpty,
             _ => panic!("Bad discriminant while generating operation!"),
         }
     }
@@ -140,6 +146,11 @@ impl<T: Arbitrary> Arbitrary for Operation<T> {
             Earliest => Box::new(iter::empty()),
             Latest => Box::new(iter::empty()),
             ShrinkToFit => Box::new(iter::empty()),
+            IsEmpty => Box::new(iter::empty()),
+            Contains(value) =>
+                Box::new(value.shrink().map(Contains)),
+            ContainsTag(tag) =>
+                Box::new(tag.shrink().map(ContainsTag)),
             EarliestMutAndSet(new) =>
                 Box::new(new.shrink().map(EarliestMutAndSet)),
             LatestMutAndSet(new) =>
@@ -196,11 +207,16 @@ fn simulate<T: Eq + Clone + Debug>(
     use Operation::*;
     match operation {
         Len => return simple.len() == complex.len(),
+        IsEmpty => return simple.is_empty() == complex.is_empty(),
         Clear => {
             simple.clear();
             complex.clear();
         },
         NextIndex => return simple.next_index() == complex.next_index(),
+        Contains(value) =>
+            return simple.contains(&value) == complex.contains(&value),
+        ContainsTag(tag) =>
+            return simple.contains_tag(&tag) == complex.contains_tag(&tag),
         Earliest => {
             let s = simple.earliest();
             let c = complex.earliest();
@@ -374,8 +390,20 @@ mod simple {
             self.inner.len()
         }
 
+        pub fn is_empty(&self) -> bool {
+            self.inner.is_empty()
+        }
+
         pub fn clear(&mut self) {
             self.inner.clear();
+        }
+
+        pub fn contains(&self, x: &T) -> bool where T: PartialEq {
+            self.inner.iter().find(|i| i.1 == *x).is_some()
+        }
+
+        pub fn contains_tag(&self, t: &usize) -> bool {
+            self.inner.iter().find(|i| i.0 == *t).is_some()
         }
 
         pub fn next_index(&self) -> u64 {

@@ -292,6 +292,19 @@ impl<K: IsEnabled + Eq + Hash + Clone, T> Queue<K, T> {
         self.info.len()
     }
 
+    /// Returns `true` if and only if the queue is empty.
+    ///
+    /// use hopscotch::Queue;
+    ///
+    /// let mut queue: Queue<usize, usize> = Queue::new();
+    /// assert!(queue.is_empty());
+    /// queue.push(0, 100);
+    /// assert!(!queue.is_empty());
+    /// ```
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
     /// The index which will be assigned to the next item to be added to the
     /// queue, whenever it is added.
     ///
@@ -409,6 +422,44 @@ impl<K: IsEnabled + Eq + Hash + Clone, T> Queue<K, T> {
         self.first_with_tag.clear();
         self.info.clear();
         self.values.clear();
+    }
+
+    /// Returns `true` if and only if the queue contains an item whose value is
+    /// equal to the given value.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use hopscotch::Queue;
+    ///
+    /// let mut queue: Queue<usize, usize> = (0..10).zip(0..10).collect();
+    /// assert_eq!(queue.contains(&5), true);
+    /// assert_eq!(queue.contains(&500), false);
+    /// ```
+    pub fn contains(&self, x: &T) -> bool where T: PartialEq {
+        self.iter_between(0, u64::max_value(), None)
+            .find(|i| x == i.value())
+            .is_some()
+    }
+
+    /// Returns `true` if and only if the queue contains an item whose tag is
+    /// equal to the given tag.
+    ///
+    /// This takes time logarithmic in the total number of tags in the queue,
+    /// which is *much* faster than traversing the entire queue in search of a
+    /// tag.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use hopscotch::Queue;
+    ///
+    /// let mut queue: Queue<usize, usize> = (0..10).zip(0..10).collect();
+    /// assert_eq!(queue.contains_tag(&5), true);
+    /// assert_eq!(queue.contains_tag(&500), false);
+    /// ```
+    pub fn contains_tag(&self, t: &K) -> bool {
+        self.first_with_tag.contains_key(t)
     }
 
     /// Shrink the memory used by the queues in this queue as much as possible.
