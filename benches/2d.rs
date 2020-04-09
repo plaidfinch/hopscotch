@@ -1,9 +1,6 @@
 #![feature(const_int_pow)]
 
-use criterion::{
-    black_box, criterion_group, criterion_main,
-    Criterion, BenchmarkId, Throughput,
-};
+use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 use rand::Rng;
 use std::collections::VecDeque;
 
@@ -29,13 +26,14 @@ const WIDTH_GRANULARITY: usize = 10;
 
 fn bench_create(c: &mut Criterion) {
     let mut group = c.benchmark_group("create");
-    for width in (1 ..= MAX_POW_2).map(|s| 2_usize.pow(s)) {
+    for width in (1..=MAX_POW_2).map(|s| 2_usize.pow(s)) {
         let id = BenchmarkId::from_parameter(width);
         group.sample_size(20);
         group.throughput(Throughput::Elements(LENGTH as u64));
         group.bench_with_input(id, &width, |b, width| {
-            let tags: Vec<usize> =
-                random_tags(black_box(*width)).take(black_box(LENGTH)).collect();
+            let tags: Vec<usize> = random_tags(black_box(*width))
+                .take(black_box(LENGTH))
+                .collect();
             b.iter(|| {
                 unit_queue_from_tags(tags.iter().copied());
             });
@@ -46,7 +44,7 @@ fn bench_create(c: &mut Criterion) {
 
 fn bench_get(c: &mut Criterion) {
     let mut group = c.benchmark_group("get");
-    for width in (1 ..= MAX_POW_2).map(|s| 2_usize.pow(s)) {
+    for width in (1..=MAX_POW_2).map(|s| 2_usize.pow(s)) {
         let id = BenchmarkId::from_parameter(width);
         let tags = random_tags(black_box(width)).take(black_box(LENGTH));
         let queue = unit_queue_from_tags(tags);
@@ -61,9 +59,8 @@ fn bench_get(c: &mut Criterion) {
 
 fn bench_after(c: &mut Criterion) {
     let mut group = c.benchmark_group("after");
-    for width in (1 ..= MAX_POW_2).map(|s| 2_usize.pow(s)) {
-        for needle_width in
-            (1 .. MAX_POW_2)
+    for width in (1..=MAX_POW_2).map(|s| 2_usize.pow(s)) {
+        for needle_width in (1..MAX_POW_2)
             .map(|s| 2_usize.pow(s))
             .filter(|s| *s <= width)
         {
@@ -76,7 +73,7 @@ fn bench_after(c: &mut Criterion) {
                 let mut rng = rand::thread_rng();
                 let i = rng.gen_range(0, LENGTH as u64);
                 let mut needle = Vec::with_capacity(needle_width);
-                for _ in 0 .. needle_width {
+                for _ in 0..needle_width {
                     needle.push(rng.gen_range(0, width + 1));
                 }
                 b.iter(|| queue.after(black_box(i), &needle));
@@ -88,16 +85,14 @@ fn bench_after(c: &mut Criterion) {
 
 fn bench_queue(c: &mut Criterion) {
     let mut group = c.benchmark_group("constant size queue");
-    for width in (1 ..= MAX_POW_2).map(|s| 2_usize.pow(s)) {
+    for width in (1..=MAX_POW_2).map(|s| 2_usize.pow(s)) {
         let id = BenchmarkId::from_parameter(width);
         group.throughput(Throughput::Elements(1));
         let samples = 100;
         group.sample_size(samples);
         group.bench_with_input(id, &width, |b, width| {
-            let tags =
-                random_tags(*width).take(LENGTH);
-            let mut queue: Queue<usize, ()> =
-                unit_queue_from_tags(tags);
+            let tags = random_tags(*width).take(LENGTH);
+            let mut queue: Queue<usize, ()> = unit_queue_from_tags(tags);
             b.iter(|| {
                 let popped = queue.pop().unwrap();
                 queue.push(popped.tag, black_box(()))
@@ -106,5 +101,12 @@ fn bench_queue(c: &mut Criterion) {
     }
 }
 
-criterion_group!(benches, bench_find);
+criterion_group!(
+    benches,
+    bench_create,
+    bench_queue,
+    bench_get,
+    bench_after,
+    bench_find,
+);
 criterion_main!(benches);

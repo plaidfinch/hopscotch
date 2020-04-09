@@ -1,27 +1,29 @@
-use quickcheck::{quickcheck, QuickCheck, Arbitrary, Gen};
+use hopscotch;
+use quickcheck::{quickcheck, Arbitrary, Gen, QuickCheck};
 use std::fmt::Debug;
 use std::iter;
-use hopscotch;
 
 /// Check that two double-ended iterators are equal under the sequence of
 /// front/back choices specified in the `ordering` iterator (where `true` means
 /// pick from front and `false` means pick from the rear).
 fn compare_double_ended_iters<T, I, J, K>(mut i: I, mut j: J, ordering: K) -> bool
-where I: Iterator<Item = T> + DoubleEndedIterator,
-      J: Iterator<Item = T> + DoubleEndedIterator,
-      K: Iterator<Item = bool>,
-      T: Eq {
+where
+    I: Iterator<Item = T> + DoubleEndedIterator,
+    J: Iterator<Item = T> + DoubleEndedIterator,
+    K: Iterator<Item = bool>,
+    T: Eq,
+{
     for side in ordering {
         if side {
             match (i.next(), j.next()) {
                 (None, None) => break,
-                (Some(x), Some(y)) if x == y => { },
+                (Some(x), Some(y)) if x == y => {}
                 _ => return false,
             }
         } else {
             match (i.next_back(), j.next_back()) {
                 (None, None) => break,
-                (Some(x), Some(y)) if x == y => { },
+                (Some(x), Some(y)) if x == y => {}
                 _ => return false,
             }
         }
@@ -32,13 +34,18 @@ where I: Iterator<Item = T> + DoubleEndedIterator,
 /// Simulate the iter_between(_mut) method for queues using the iterator for
 /// `Vec` as a test case.
 fn vec_iter_between<'a, T: Clone>(
-    tags: &'a Option<&'a [usize]>, lo: usize, hi: usize, vec: &'a [(usize, T)]
+    tags: &'a Option<&'a [usize]>,
+    lo: usize,
+    hi: usize,
+    vec: &'a [(usize, T)],
 ) -> impl Iterator<Item = (usize, T)> + DoubleEndedIterator + 'a {
-    vec.iter().cloned().enumerate()
+    vec.iter()
+        .cloned()
+        .enumerate()
         .filter(move |(i, (t, _))| {
-            (tags.is_none() || tags.unwrap().contains(&t))
-                && *i <= lo.max(hi) && *i >= lo.min(hi)
-        }).map(|p| p.1)
+            (tags.is_none() || tags.unwrap().contains(&t)) && *i <= lo.max(hi) && *i >= lo.min(hi)
+        })
+        .map(|p| p.1)
 }
 
 quickcheck! {
@@ -147,33 +154,41 @@ impl<T: Arbitrary> Arbitrary for Operation<T> {
             Latest => Box::new(iter::empty()),
             ShrinkToFit => Box::new(iter::empty()),
             IsEmpty => Box::new(iter::empty()),
-            Contains(value) =>
-                Box::new(value.shrink().map(Contains)),
-            ContainsTag(tag) =>
-                Box::new(tag.shrink().map(ContainsTag)),
-            EarliestMutAndSet(new) =>
-                Box::new(new.shrink().map(EarliestMutAndSet)),
-            LatestMutAndSet(new) =>
-                Box::new(new.shrink().map(LatestMutAndSet)),
+            Contains(value) => Box::new(value.shrink().map(Contains)),
+            ContainsTag(tag) => Box::new(tag.shrink().map(ContainsTag)),
+            EarliestMutAndSet(new) => Box::new(new.shrink().map(EarliestMutAndSet)),
+            LatestMutAndSet(new) => Box::new(new.shrink().map(LatestMutAndSet)),
             Get(index) => Box::new(index.shrink().map(Get)),
-            GetMutAndSet(index, new) =>
-                Box::new((index.clone(), new.clone()).shrink()
-                        .map(|(i, n)| GetMutAndSet(i, n))),
-            After(index, tags) =>
-                Box::new((index.clone(), tags.clone()).shrink()
-                        .map(|(i, ts)| After(i, ts))),
-            AfterMutAndSet(index, tags, new) =>
-                Box::new((index.clone(), tags.clone(), new.clone()).shrink()
-                        .map(|(i, ts, n)| AfterMutAndSet(i, ts, n))),
-            Before(index, tags) =>
-                Box::new((index.clone(), tags.clone()).shrink()
-                        .map(|(i, ts)| Before(i, ts))),
-            BeforeMutAndSet(index, tags, new) =>
-                Box::new((index.clone(), tags.clone(), new.clone()).shrink()
-                        .map(|(i, ts, n)| BeforeMutAndSet(i, ts, n))),
-            Push(tag, value) =>
-                Box::new((tag.clone(), value.clone()).shrink()
-                        .map(|(t, v)| Push(t, v))),
+            GetMutAndSet(index, new) => Box::new(
+                (index.clone(), new.clone())
+                    .shrink()
+                    .map(|(i, n)| GetMutAndSet(i, n)),
+            ),
+            After(index, tags) => Box::new(
+                (index.clone(), tags.clone())
+                    .shrink()
+                    .map(|(i, ts)| After(i, ts)),
+            ),
+            AfterMutAndSet(index, tags, new) => Box::new(
+                (index.clone(), tags.clone(), new.clone())
+                    .shrink()
+                    .map(|(i, ts, n)| AfterMutAndSet(i, ts, n)),
+            ),
+            Before(index, tags) => Box::new(
+                (index.clone(), tags.clone())
+                    .shrink()
+                    .map(|(i, ts)| Before(i, ts)),
+            ),
+            BeforeMutAndSet(index, tags, new) => Box::new(
+                (index.clone(), tags.clone(), new.clone())
+                    .shrink()
+                    .map(|(i, ts, n)| BeforeMutAndSet(i, ts, n)),
+            ),
+            Push(tag, value) => Box::new(
+                (tag.clone(), value.clone())
+                    .shrink()
+                    .map(|(t, v)| Push(t, v)),
+            ),
             Pop => Box::new(iter::empty()),
         }
     }
@@ -211,93 +226,90 @@ fn simulate<T: Eq + Clone + Debug>(
         Clear => {
             simple.clear();
             complex.clear();
-        },
+        }
         NextIndex => return simple.next_index() == complex.next_index(),
-        Contains(value) =>
-            return simple.contains(&value) == complex.contains(&value),
-        ContainsTag(tag) =>
-            return simple.contains_tag(&tag) == complex.contains_tag(&tag),
+        Contains(value) => return simple.contains(&value) == complex.contains(&value),
+        ContainsTag(tag) => return simple.contains_tag(&tag) == complex.contains_tag(&tag),
         Earliest => {
             let s = simple.earliest();
             let c = complex.earliest();
             return s == c.map(hopscotch::Item::into);
-        },
+        }
         Latest => {
             let s = simple.latest();
             let c = complex.latest();
             return s == c.map(hopscotch::Item::into);
-        },
+        }
         ShrinkToFit => {
             simple.shrink_to_fit();
             complex.shrink_to_fit();
-        },
+        }
         Get(index) => {
             let s = simple.get(index);
             let c = complex.get(index);
             return s == c.map(hopscotch::Item::into);
-        },
+        }
         After(index, tags) => {
             let s = simple.after(index, &tags);
             let c = complex.after(index, &tags);
             return s == c.map(hopscotch::Item::into);
-        },
+        }
         Before(index, tags) => {
             let s = simple.before(index, &tags);
             let c = complex.before(index, &tags);
             return s == c.map(hopscotch::Item::into);
-        },
-        EarliestMutAndSet(new) => {
-            match (simple.earliest_mut(), complex.earliest_mut()) {
-                (None, None) => { },
-                (Some(mut s), Some(mut c)) => {
-                    *s.as_mut() = new.clone();
-                    *c.as_mut() = new;
-                },
-                _ => return false,
+        }
+        EarliestMutAndSet(new) => match (simple.earliest_mut(), complex.earliest_mut()) {
+            (None, None) => {}
+            (Some(mut s), Some(mut c)) => {
+                *s.as_mut() = new.clone();
+                *c.as_mut() = new;
             }
+            _ => return false,
         },
-        LatestMutAndSet(new) => {
-            match (simple.latest_mut(), complex.latest_mut()) {
-                (None, None) => { },
-                (Some(mut s), Some(mut c)) => {
-                    *s.as_mut() = new.clone();
-                    *c.as_mut() = new;
-                },
-                _ => return false,
+        LatestMutAndSet(new) => match (simple.latest_mut(), complex.latest_mut()) {
+            (None, None) => {}
+            (Some(mut s), Some(mut c)) => {
+                *s.as_mut() = new.clone();
+                *c.as_mut() = new;
             }
+            _ => return false,
         },
-        GetMutAndSet(index, new) => {
-            match (simple.get_mut(index), complex.get_mut(index)) {
-                (None, None) => { },
-                (Some(mut s), Some(mut c)) => {
-                    *s.as_mut() = new.clone();
-                    *c.as_mut() = new;
-                },
-                _ => return false,
+        GetMutAndSet(index, new) => match (simple.get_mut(index), complex.get_mut(index)) {
+            (None, None) => {}
+            (Some(mut s), Some(mut c)) => {
+                *s.as_mut() = new.clone();
+                *c.as_mut() = new;
             }
+            _ => return false,
         },
         AfterMutAndSet(index, tags, new) => {
-            match (simple.after_mut(index, &tags), complex.after_mut(index, &tags)) {
-                (None, None) => { },
+            match (
+                simple.after_mut(index, &tags),
+                complex.after_mut(index, &tags),
+            ) {
+                (None, None) => {}
                 (Some(mut s), Some(mut c)) => {
                     *s.as_mut() = new.clone();
                     *c.as_mut() = new;
-                },
+                }
                 _ => return false,
             }
-        },
+        }
         BeforeMutAndSet(index, tags, new) => {
-            match (simple.before_mut(index, &tags), complex.before_mut(index, &tags)) {
-                (None, None) => { },
+            match (
+                simple.before_mut(index, &tags),
+                complex.before_mut(index, &tags),
+            ) {
+                (None, None) => {}
                 (Some(mut s), Some(mut c)) => {
                     *s.as_mut() = new.clone();
                     *c.as_mut() = new;
-                },
+                }
                 _ => return false,
             }
-        },
-        Push(tag, value) =>
-            return simple.push(tag, value.clone()) == complex.push(tag, value),
+        }
+        Push(tag, value) => return simple.push(tag, value.clone()) == complex.push(tag, value),
         Pop => return simple.pop() == complex.pop().map(hopscotch::Popped::into),
     }
     true
@@ -307,16 +319,16 @@ fn simulate<T: Eq + Clone + Debug>(
 /// queue, with worse asymptotics.
 #[allow(dead_code)]
 mod simple {
-    use std::convert::TryInto;
-    use std::collections::VecDeque;
     use hopscotch;
+    use std::collections::VecDeque;
+    use std::convert::TryInto;
 
     /// A simple queue which should be behaviorally indistinguishable (but
     /// slower) than a hopscotch queue. Used for testing by bi-simulation.
     #[derive(Debug, Clone)]
     pub(super) struct Queue<T> {
         offset: u64,
-        inner: VecDeque<(usize, T)>
+        inner: VecDeque<(usize, T)>,
     }
 
     #[derive(Debug, Clone, PartialEq, PartialOrd, Eq, Ord, Hash)]
@@ -327,9 +339,15 @@ mod simple {
     }
 
     impl<T> Item<T> {
-        pub fn index(&self) -> u64 { self.index }
-        pub fn tag(&self) -> usize { self.tag }
-        pub fn value(self) -> T { self.value }
+        pub fn index(&self) -> u64 {
+            self.index
+        }
+        pub fn tag(&self) -> usize {
+            self.tag
+        }
+        pub fn value(self) -> T {
+            self.value
+        }
     }
 
     impl<T> AsRef<T> for Item<&T> {
@@ -398,7 +416,10 @@ mod simple {
             self.inner.clear();
         }
 
-        pub fn contains(&self, x: &T) -> bool where T: PartialEq {
+        pub fn contains(&self, x: &T) -> bool
+        where
+            T: PartialEq,
+        {
             self.inner.iter().find(|i| i.1 == *x).is_some()
         }
 
@@ -414,24 +435,40 @@ mod simple {
 
         pub fn earliest(&self) -> Option<Item<&T>> {
             let (tag, value) = self.inner.front()?;
-            Some(Item{index: self.offset, tag: *tag, value})
+            Some(Item {
+                index: self.offset,
+                tag: *tag,
+                value,
+            })
         }
 
         pub fn earliest_mut(&mut self) -> Option<Item<&mut T>> {
             let (tag, value) = self.inner.front_mut()?;
-            Some(Item{index: self.offset, tag: *tag, value})
+            Some(Item {
+                index: self.offset,
+                tag: *tag,
+                value,
+            })
         }
 
         pub fn latest(&self) -> Option<Item<&T>> {
             let index = self.offset.checked_add(self.len().checked_sub(1)? as u64)?;
             let (tag, value) = self.inner.back()?;
-            Some(Item{index, tag: *tag, value})
+            Some(Item {
+                index,
+                tag: *tag,
+                value,
+            })
         }
 
         pub fn latest_mut(&mut self) -> Option<Item<&mut T>> {
             let index = self.offset.checked_add(self.len().checked_sub(1)? as u64)?;
             let (tag, value) = self.inner.back_mut()?;
-            Some(Item{index, tag: *tag, value})
+            Some(Item {
+                index,
+                tag: *tag,
+                value,
+            })
         }
 
         pub fn shrink_to_fit(&mut self) {
@@ -441,13 +478,21 @@ mod simple {
         pub fn get(&self, index: u64) -> Option<Item<&T>> {
             let inner_index = index.checked_sub(self.offset)?.try_into().ok()?;
             let (tag, value) = self.inner.get(inner_index)?;
-            Some(Item{index, tag: *tag, value})
+            Some(Item {
+                index,
+                tag: *tag,
+                value,
+            })
         }
 
         pub fn get_mut(&mut self, index: u64) -> Option<Item<&mut T>> {
             let inner_index = index.checked_sub(self.offset)?.try_into().ok()?;
             let (tag, value) = self.inner.get_mut(inner_index)?;
-            Some(Item{index, tag: *tag, value})
+            Some(Item {
+                index,
+                tag: *tag,
+                value,
+            })
         }
 
         pub fn after(&self, mut index: u64, tags: &[usize]) -> Option<Item<&T>> {
@@ -455,7 +500,7 @@ mod simple {
             loop {
                 let item = self.get(index)?;
                 if tags.contains(&item.tag()) {
-                    return Some(item)
+                    return Some(item);
                 }
                 index = index.checked_add(1)?;
             }
@@ -478,7 +523,7 @@ mod simple {
             loop {
                 let item = self.get(index)?;
                 if tags.contains(&item.tag()) {
-                    return Some(item)
+                    return Some(item);
                 }
                 index = index.checked_sub(1)?;
             }
@@ -504,7 +549,11 @@ mod simple {
 
         pub fn pop(&mut self) -> Option<Item<T>> {
             let (tag, value) = self.inner.pop_front()?;
-            let result = Item{tag, value, index: self.offset};
+            let result = Item {
+                tag,
+                value,
+                index: self.offset,
+            };
             self.offset += 1;
             Some(result)
         }
