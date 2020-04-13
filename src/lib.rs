@@ -1,29 +1,41 @@
-//! A [`hopscotch::Queue`](struct@Queue) is a earliest-in-earliest-out (FIFO)
-//! queue where each [`Item`](struct@Item) in the queue has
+//! A [`hopscotch::Queue<K, V>`](struct@Queue) is a first-in-first-out queue
+//! where each [`Item<K, V>`](struct@Item) in the queue has
 //!
-//! - a [`value`](Item.value),
-//! - an immutable [`tag`](Item.tag) of type `K`, and
-//! - a unique [`index`](Item.index) of type `u64` which is assigned
-//! in sequential order of insertion starting at 0 when the queue is created.
+//! - a value of type `V`,
+//! - an immutable tag of type `K`, and
+//! - a unique `index` of type `u64` which is assigned in sequential order of
+//!   insertion starting at 0 when the queue is created.
 //!
-//! In addition to supporting the ordinary [`push`](Queue.push),
-//! [`pop`](Queue.pop), and [`get`](Queue.get) methods of a FIFO queue, a
-//! hopscotch queue also supports the methods [`after`](Queue.after) and
-//! [`before`](Queue.before) (and their respective `_mut` variants):
+//! In addition to supporting the ordinary [`push`](Queue::push),
+//! [`pop`](Queue::pop), and [`get`](Queue::get) methods of a FIFO queue, a
+//! hopscotch queue also supports the special, optimized methods
+//! [`after`](Queue::after), [`after_mut`](Queue::after_mut),
+//! [`before`](Queue::before), and [`before_mut`](Queue::before_mut).
+//!
+//! These methods find the next (or previous) [`Item`] (or [`ItemMut`]) in the
+//! queue whose tag is equal to any of a given set of tags. For instance, the
+//! signature of [`after`](Queue::after) is:
 //!
 //! ```
-//! use hopscotch::Item;
+//! # use hopscotch::Item;
+//! # struct X<K, V>(K, V);
+//! # impl<K, V> X<K, V> {
+//! pub fn after<'a, Tags>(&self, index: u64, tags: Tags) -> Option<Item<K, V>>
+//!     where
+//!         Tags: IntoIterator<Item = &'a K>,
+//!         K: 'a,
+//! # { panic!() }
+//! ```
+//!
+//! If we use `&[K]` for `Tags`, this signature simplifies to:
+//!
+//! ```
+//! # use hopscotch::Item;
 //! # struct X<K, V>(K, V);
 //! # impl<K, V> X<K, V> {
 //! pub fn after(&self, index: u64, tags: &[K]) -> Option<Item<K, V>>
 //! # { panic!() }
-//! pub fn before(&self, index: u64, tags: &[K]) -> Option<Item<K, V>>
-//! # { panic!() }
-//! # }
 //! ```
-//!
-//! These methods find next [`Item`] (or [`ItemMut`]) in the queue whose
-//! [`tag`](Item.tag) is equal to any of a given set of tags.
 //!
 //! These methods are the real benefit of using a hopscotch queue over another
 //! data structure. Their asymptotic time complexity is:
@@ -31,33 +43,30 @@
 //! - linear relative to the number of tags queried,
 //! - logarithmic relative to the total number of distinct tags in the queue,
 //! - constant relative to the length of the queue, and
-//! - constant relative to the distance between successive items of the same tag.
+//! - constant relative to the distance between successive items with the same
+//!   tag.
 //!
-//! This data structure is significantly optimized for small keys. The types
-//! usable as tags are limited to: `u8, u16, u32, u64, usize, i8, i16, i32, i64,
-//! isize`, or any third-party types which are instances of the
-//! [`nohash-hasher`](http://crates.io/crates/nohash-hasher) crate's
-//! [`IsEnabled`] trait. In practice, it's usually the right choice to just pick
-//! one of these tag types.
+//! Hopscotch queues also provide flexible iterators [`Iter`]/[`IterMut`] to
+//! efficiently traverse portions of their contents, sliced by index using
+//! [`Iter::until`]/[`IterMut::until`] and [`Iter::after`]/[`IterMut::after`],
+//! and filtered by set of desired tags using
+//! [`Iter::matching_only`]/[`IterMut::matching_only`].
 
 use std::collections::VecDeque;
 use std::convert::TryInto;
-use std::hash::{BuildHasherDefault, Hash};
+use std::hash::{Hash, BuildHasher};
+use std::collections::hash_map::RandomState;
 use std::iter::FromIterator;
 
 use im::hashmap::HashMap;
-use nohash_hasher::{IsEnabled, NoHashHasher};
 
 /// A hopscotch queue with keys of type `K` and items of type `V`.
-///
-/// Note that the types of keys are constrained by the `IsEnabled` trait from
-/// the `nohash-hasher` crate, which effectively limits them to the set of
-/// primitive types: `u8, u16, u32, u64, usize, i8, i16, i32, i64, isize`.
-#[derive(Debug, Clone)]
-pub struct Queue<K: IsEnabled + Eq + Hash + Clone, V> {
+#[derive(Clone)]
+pub struct Queue<K: Eq + Hash + Clone, V, S = RandomState> {
+    make_hasher: fn() -> S,
     offset: u64,
-    first_with_tag: HashMap<K, u64, BuildHasherDefault<NoHashHasher<K>>>,
-    info: VecDeque<Info<K>>,
+    first_with_tag: HashMap<K, u64, S>,
+    info: VecDeque<Info<K, S>>,
     values: VecDeque<V>,
 }
 
@@ -86,7 +95,7 @@ pub struct Popped<K, V> {
     /// The tag of the item which was originally assigned when the item was
     /// inserted into the queue.
     pub tag: K,
-    /// Get a mutable reference to the value contained in this item.
+    /// The value contained in this item.
     pub value: V,
 }
 
@@ -107,7 +116,7 @@ impl<'a, K, V> Item<'a, K, V> {
     }
 }
 
-impl<'a, K: IsEnabled + Eq + Hash + Clone, V> ItemMut<'a, K, V> {
+impl<'a, K: Eq + Hash + Clone, V> ItemMut<'a, K, V> {
     /// The index of the item: this is unique for the entire lifetime of the
     /// queue from which this item originated.
     pub fn index(&self) -> u64 {
@@ -129,29 +138,29 @@ impl<'a, K: IsEnabled + Eq + Hash + Clone, V> ItemMut<'a, K, V> {
     }
 }
 
-impl<K: IsEnabled + Eq + Hash + Clone, V> AsRef<V> for Item<'_, K, V> {
+impl<K: Eq + Hash + Clone, V> AsRef<V> for Item<'_, K, V> {
     fn as_ref(&self) -> &V {
         self.value
     }
 }
 
-impl<K: IsEnabled + Eq + Hash + Clone, V> AsRef<V> for ItemMut<'_, K, V> {
+impl<K: Eq + Hash + Clone, V> AsRef<V> for ItemMut<'_, K, V> {
     fn as_ref(&self) -> &V {
         &*self.value
     }
 }
 
-impl<K: IsEnabled + Eq + Hash + Clone, V> AsMut<V> for ItemMut<'_, K, V> {
+impl<K: Eq + Hash + Clone, V> AsMut<V> for ItemMut<'_, K, V> {
     fn as_mut(&mut self) -> &mut V {
         self.value
     }
 }
 
-#[derive(Debug, Clone)]
-struct Info<K: IsEnabled + Eq + Hash> {
+#[derive(Clone)]
+struct Info<K: Eq + Hash, S> {
     tag: K,
     next_with_tag: usize,
-    previous_with_tag: HashMap<K, u64, BuildHasherDefault<NoHashHasher<K>>>,
+    previous_with_tag: HashMap<K, u64, S>,
 }
 
 /// Either e.get(i), or e.get_mut(i), depending on whether a third argument is
@@ -267,24 +276,7 @@ macro_rules! after_impl {
     };
 }
 
-impl<K: IsEnabled + Eq + Hash + Clone, V> Queue<K, V> {
-    /// Given an external persistent index, get the current index within the
-    /// internal queue that corresponds to it. This correspondence is
-    /// invalidated by future changes to the queue.
-    fn as_internal_index(&self, index: u64) -> Option<usize> {
-        index.checked_sub(self.offset)?.try_into().ok()
-    }
-
-    /// Get the internal info at a given external index.
-    fn info(&self, index: u64) -> Option<&Info<K>> {
-        self.info.get(self.as_internal_index(index)?)
-    }
-
-    /// Get the internal info (mutably) at a given external index.
-    fn info_mut(&mut self, index: u64) -> Option<&mut Info<K>> {
-        self.info.get_mut(self.as_internal_index(index)?)
-    }
-
+impl<K: Eq + Hash + Clone, V> Queue<K, V, RandomState> {
     /// Make a new queue.
     ///
     /// # Examples
@@ -308,14 +300,32 @@ impl<K: IsEnabled + Eq + Hash + Clone, V> Queue<K, V> {
     /// let mut queue: Queue<usize, usize> = Queue::with_capacity(10);
     /// ```
     pub fn with_capacity(capacity: usize) -> Queue<K, V> {
-        let map: HashMap<K, u64, BuildHasherDefault<NoHashHasher<K>>> =
-            HashMap::with_hasher(BuildHasherDefault::default());
         Queue {
+            make_hasher: RandomState::new,
             offset: 0,
-            first_with_tag: map,
+            first_with_tag: HashMap::new(),
             info: VecDeque::with_capacity(capacity),
             values: VecDeque::with_capacity(capacity),
         }
+    }
+}
+
+impl<K: Eq + Hash + Clone, V, S: BuildHasher> Queue<K, V, S> {
+    /// Given an external persistent index, get the current index within the
+    /// internal queue that corresponds to it. This correspondence is
+    /// invalidated by future changes to the queue.
+    fn as_internal_index(&self, index: u64) -> Option<usize> {
+        index.checked_sub(self.offset)?.try_into().ok()
+    }
+
+    /// Get the internal info at a given external index.
+    fn info(&self, index: u64) -> Option<&Info<K, S>> {
+        self.info.get(self.as_internal_index(index)?)
+    }
+
+    /// Get the internal info (mutably) at a given external index.
+    fn info_mut(&mut self, index: u64) -> Option<&mut Info<K, S>> {
+        self.info.get_mut(self.as_internal_index(index)?)
     }
 
     /// The number of items currently in the queue.
@@ -365,7 +375,7 @@ impl<K: IsEnabled + Eq + Hash + Clone, V> Queue<K, V> {
             .info
             .back()
             .map(|latest| latest.previous_with_tag.clone())
-            .unwrap_or_else(|| HashMap::with_hasher(BuildHasherDefault::default()));
+            .unwrap_or_else(|| HashMap::with_hasher((self.make_hasher)()));
         // Set the next_with_tag index of the previous of this tag to point to
         // the index we're about to insert at.
         previous_with_tag.get(&tag).map(|previous_index| {
@@ -1041,7 +1051,7 @@ impl<K: IsEnabled + Eq + Hash + Clone, V> Queue<K, V> {
     ///     .map(|i| i.value().as_ref()).collect();
     /// assert_eq!(all_backwards, &["le monde!", "world!", "Bonjour", "Hello"]);
     /// ```
-    pub fn iter(&self) -> Iter<K, V, impl Iterator<Item = &'_ K> + Clone> {
+    pub fn iter(&self) -> Iter<K, V, impl Iterator<Item = &'_ K> + Clone, S> {
         let head = Some(self.next_index().saturating_sub(1));
         let tail = Some(self.earliest_index());
         Iter {
@@ -1082,7 +1092,7 @@ impl<K: IsEnabled + Eq + Hash + Clone, V> Queue<K, V> {
     ///     .map(|i| i.value().as_ref()).collect();
     /// assert_eq!(words, &["HELLO", "Bonjour", "WORLD!", "le monde!"]);
     /// ```
-    pub fn iter_mut(&mut self) -> IterMut<K, V, impl Iterator<Item = &'_ K> + Clone> {
+    pub fn iter_mut(&mut self) -> IterMut<K, V, impl Iterator<Item = &'_ K> + Clone, S> {
         let head = Some(self.next_index().saturating_sub(1));
         let tail = Some(self.earliest_index());
         IterMut {
@@ -1092,9 +1102,44 @@ impl<K: IsEnabled + Eq + Hash + Clone, V> Queue<K, V> {
             tail,
         }
     }
+
+    /// Make an empty queue which will use the given hash builder initializer to
+    /// hash tags internally.
+    ///
+    /// The given function pointer will be invoked to make a [`BuildHasher`] on
+    /// every `push` operation, so it is essential for performance that it be
+    /// fast.
+    ///
+    /// The same warning applies here as does for any hashing-based structure:
+    /// supplying your own hasher can lead to a DoS attack vector in the form of
+    /// maliciously crafted inputs that cause many hash collisions.
+    pub fn with_hasher(make_hasher: fn() -> S) -> Queue<K, V, S> {
+        Self::with_capacity_and_hasher(0, make_hasher)
+    }
+
+    /// Make an empty queue with the capacity to hold a given number of elements
+    /// without further allocation, and which will use the given hash builder
+    /// initializer to hash tags internally.
+    ///
+    /// The given function pointer will be invoked to make a [`BuildHasher`] on
+    /// every `push` operation, so it is essential for performance that it be
+    /// fast.
+    ///
+    /// The same warning applies here as does for any hashing-based structure:
+    /// supplying your own hasher can lead to a DoS attack vector in the form of
+    /// maliciously crafted inputs that cause many hash collisions.
+    pub fn with_capacity_and_hasher(capacity: usize, make_hasher: fn() -> S) -> Queue<K, V, S> {
+        Queue {
+            make_hasher,
+            offset: 0,
+            first_with_tag: HashMap::with_hasher(make_hasher()),
+            info: VecDeque::with_capacity(capacity),
+            values: VecDeque::with_capacity(capacity),
+        }
+    }
 }
 
-impl<K: IsEnabled + Eq + Hash + Clone, V> FromIterator<(K, V)> for Queue<K, V> {
+impl<K: Eq + Hash + Clone, V> FromIterator<(K, V)> for Queue<K, V> {
     fn from_iter<I>(iter: I) -> Self
     where
         I: IntoIterator<Item = (K, V)>,
@@ -1108,7 +1153,7 @@ impl<K: IsEnabled + Eq + Hash + Clone, V> FromIterator<(K, V)> for Queue<K, V> {
     }
 }
 
-impl<K: IsEnabled + Eq + Hash + Clone, V> Extend<(K, V)> for Queue<K, V> {
+impl<K: Eq + Hash + Clone, V> Extend<(K, V)> for Queue<K, V> {
     fn extend<I>(&mut self, iter: I)
     where
         I: IntoIterator<Item = (K, V)>,
@@ -1120,21 +1165,21 @@ impl<K: IsEnabled + Eq + Hash + Clone, V> Extend<(K, V)> for Queue<K, V> {
 }
 
 /// An iterator over immutable references to items in a queue.
-#[derive(Debug, Clone)]
-pub struct Iter<'a, 'b, K, V, Tags>
+#[derive(Clone)]
+pub struct Iter<'a, 'b, K, V, Tags, S = RandomState>
 where
-    K: IsEnabled + Eq + Hash + Clone + 'b,
+    K: Eq + Hash + Clone + 'b,
     Tags: Iterator<Item = &'b K> + Clone,
 {
-    inner: &'a Queue<K, V>,
+    inner: &'a Queue<K, V, S>,
     tags: Option<Tags>,
     head: Option<u64>,
     tail: Option<u64>,
 }
 
-impl<'a, 'b, K, V, T> Iter<'a, 'b, K, V, T>
+impl<'a, 'b, K, V, T, S> Iter<'a, 'b, K, V, T, S>
 where
-    K: IsEnabled + Eq + Hash + Clone + 'b,
+    K: Eq + Hash + Clone + 'b,
     T: Iterator<Item = &'b K> + Clone,
 {
     /// Restrict this iterator to indices greater than or equal to `earliest`.
@@ -1148,7 +1193,7 @@ where
     /// let vec: Vec<_> = queue.iter().after(2).map(|i| *i.value()).collect();
     /// assert_eq!(&vec, &[2, 3]);
     /// ```
-    pub fn after(self, earliest: u64) -> Iter<'a, 'b, K, V, T> {
+    pub fn after(self, earliest: u64) -> Iter<'a, 'b, K, V, T, S> {
         Iter {
             inner: self.inner,
             tags: self.tags,
@@ -1168,7 +1213,7 @@ where
     /// let vec: Vec<_> = queue.iter().until(1).map(|i| *i.value()).collect();
     /// assert_eq!(&vec, &[0, 1]);
     /// ```
-    pub fn until(self, latest: u64) -> Iter<'a, 'b, K, V, T> {
+    pub fn until(self, latest: u64) -> Iter<'a, 'b, K, V, T, S> {
         Iter {
             inner: self.inner,
             tags: self.tags,
@@ -1197,7 +1242,7 @@ where
     ///     queue.iter().matching_only(&[1]).map(|i| *i.value()).collect();
     /// assert_eq!(&vec, &[1, 3]);
     /// ```
-    pub fn matching_only<Tags>(self, tags: Tags) -> Iter<'a, 'b, K, V, Tags::IntoIter>
+    pub fn matching_only<Tags>(self, tags: Tags) -> Iter<'a, 'b, K, V, Tags::IntoIter, S>
     where
         Tags: IntoIterator<Item = &'b K>,
         Tags::IntoIter: Clone,
@@ -1211,10 +1256,11 @@ where
     }
 }
 
-impl<'a, 'b, K, V, Tags> Iterator for Iter<'a, 'b, K, V, Tags>
+impl<'a, 'b, K, V, Tags, S> Iterator for Iter<'a, 'b, K, V, Tags, S>
 where
-    K: IsEnabled + Eq + Hash + Clone + 'b,
+    K: Eq + Hash + Clone + 'b,
     Tags: Iterator<Item = &'b K> + Clone,
+    S: BuildHasher,
 {
     type Item = Item<'a, K, V>;
 
@@ -1235,10 +1281,11 @@ where
     }
 }
 
-impl<'a, 'b, K, V, Tags> DoubleEndedIterator for Iter<'a, 'b, K, V, Tags>
+impl<'a, 'b, K, V, Tags, S> DoubleEndedIterator for Iter<'a, 'b, K, V, Tags, S>
 where
-    K: IsEnabled + Eq + Hash + Clone + 'b,
+    K: Eq + Hash + Clone + 'b,
     Tags: Iterator<Item = &'b K> + Clone,
+    S: BuildHasher,
 {
     fn next_back(&mut self) -> Option<Self::Item> {
         if self.tail? > self.head? {
@@ -1258,21 +1305,20 @@ where
 }
 
 /// An iterator over mutable references to items in a queue.
-#[derive(Debug)]
-pub struct IterMut<'a, 'b, K, V, Tags>
+pub struct IterMut<'a, 'b, K, V, Tags, S = RandomState>
 where
-    K: IsEnabled + Eq + Hash + Clone + 'b,
+    K: Eq + Hash + Clone + 'b,
     Tags: Iterator<Item = &'b K> + Clone,
 {
-    inner: &'a mut Queue<K, V>,
+    inner: &'a mut Queue<K, V, S>,
     tags: Option<Tags>,
     head: Option<u64>,
     tail: Option<u64>,
 }
 
-impl<'a, 'b, K, V, T> IterMut<'a, 'b, K, V, T>
+impl<'a, 'b, K, V, T, S> IterMut<'a, 'b, K, V, T, S>
 where
-    K: IsEnabled + Eq + Hash + Clone + 'b,
+    K: Eq + Hash + Clone + 'b,
     T: Iterator<Item = &'b K> + Clone,
 {
     /// Restrict this iterator to indices greater than or equal to `earliest`.
@@ -1289,7 +1335,7 @@ where
     /// let vec: Vec<_> = queue.iter().map(|i| *i.value()).collect();
     /// assert_eq!(&vec, &[0, 1, 2000, 3000]);
     /// ```
-    pub fn after(self, earliest: u64) -> IterMut<'a, 'b, K, V, T> {
+    pub fn after(self, earliest: u64) -> IterMut<'a, 'b, K, V, T, S> {
         IterMut {
             inner: self.inner,
             tags: self.tags,
@@ -1312,7 +1358,7 @@ where
     /// let vec: Vec<_> = queue.iter().map(|i| *i.value()).collect();
     /// assert_eq!(&vec, &[1000, 1001, 2, 3]);
     /// ```
-    pub fn until(self, latest: u64) -> IterMut<'a, 'b, K, V, T> {
+    pub fn until(self, latest: u64) -> IterMut<'a, 'b, K, V, T, S> {
         IterMut {
             inner: self.inner,
             tags: self.tags,
@@ -1343,7 +1389,7 @@ where
     /// let vec: Vec<_> = queue.iter().map(|i| *i.value()).collect();
     /// assert_eq!(&vec, &[0, 1000, 2, 3000]);
     /// ```
-    pub fn matching_only<Tags>(self, tags: Tags) -> IterMut<'a, 'b, K, V, Tags::IntoIter>
+    pub fn matching_only<Tags>(self, tags: Tags) -> IterMut<'a, 'b, K, V, Tags::IntoIter, S>
     where
         Tags: IntoIterator<Item = &'b K>,
         Tags::IntoIter: Clone,
@@ -1362,8 +1408,11 @@ where
 // index is always incremented by at least one, which means we'll never produce
 // the same thing again -- even in the DoubleEndedIterator case.
 
-impl<'a, 'b, K: IsEnabled + Eq + Hash + Clone + 'b, V, Tags: Iterator<Item = &'b K> + Clone>
-    Iterator for IterMut<'a, 'b, K, V, Tags>
+impl<'a, 'b, K, V, Tags, S> Iterator for IterMut<'a, 'b, K, V, Tags, S>
+where
+    K: Eq + Hash + Clone + 'b,
+    Tags: Iterator<Item = &'b K> + Clone,
+    S: BuildHasher,
 {
     type Item = ItemMut<'a, K, V>;
 
@@ -1388,8 +1437,11 @@ impl<'a, 'b, K: IsEnabled + Eq + Hash + Clone + 'b, V, Tags: Iterator<Item = &'b
     }
 }
 
-impl<'a, 'b, K: IsEnabled + Eq + Hash + Clone + 'b, V, Tags: Iterator<Item = &'b K> + Clone> DoubleEndedIterator
-    for IterMut<'a, 'b, K, V, Tags>
+impl<'a, 'b, K, V, Tags, S> DoubleEndedIterator for IterMut<'a, 'b, K, V, Tags, S>
+where
+    K: Eq + Hash + Clone + 'b,
+    Tags: Iterator<Item = &'b K> + Clone,
+    S: BuildHasher,
 {
     fn next_back(&mut self) -> Option<Self::Item> {
         if self.tail? > self.head? {
