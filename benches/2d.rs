@@ -99,11 +99,5 @@ fn bench_queue(c: &mut Criterion) {
     }
 }
 
-criterion_group!(
-    benches,
-    bench_create,
-    bench_queue,
-    bench_get,
-    bench_after,
-);
+criterion_group!(benches, bench_create, bench_queue, bench_get, bench_after,);
 criterion_main!(benches);
