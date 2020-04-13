@@ -1,24 +1,31 @@
-# Hopscotch Queues
+A `hopscotch::Queue<K, V>` is a first-in-first-out queue where each `Item<K, V>`
+in the queue has
 
-A `hopscotch::Queue` is a earliest-in-earliest-out (FIFO)
-queue where each item in the queue has:
-
-- a value,
-- an immutable tag, and
-- a unique index which is assigned in sequential order of insertion
-starting at 0 when the queue is created.
+- a value of type `V`,
+- an immutable tag of type `K`, and
+- a unique `index` of type `u64` which is assigned in sequential order of
+  insertion starting at 0 when the queue is created.
 
 In addition to supporting the ordinary `push`, `pop`, and `get` methods of a
-FIFO queue, a hopscotch queue also supports the methods `after` and
-`before` (and their respective `_mut` variants):
+FIFO queue, a hopscotch queue also supports the special, optimized methods
+`after`, `after_mut`, `before`, and `before_mut`.
+
+These methods find the next (or previous) `Item` (or `ItemMut`) in the
+queue whose tag is equal to any of a given set of tags. For instance, the
+signature of `after` is:
 
 ```rust
-pub fn after(&self, index: u64, tags: &[K]) -> Option<Item<K, T>> { ... }
-pub fn before(&self, index: u64, tags: &[K]) -> Option<Item<K, T>> { ... }
+pub fn after<'a, Tags>(&self, index: u64, tags: Tags) -> Option<Item<K, V>>
+    where
+        Tags: IntoIterator<Item = &'a K>,
+        K: 'a,
 ```
 
-These methods find next item in the queue whose tag is equal to any of a given
-set of tags.
+If we use `&[K]` for `Tags`, this signature simplifies to:
+
+```rust
+pub fn after(&self, index: u64, tags: &[K]) -> Option<Item<K, V>>
+```
 
 These methods are the real benefit of using a hopscotch queue over another
 data structure. Their asymptotic time complexity is:
@@ -26,7 +33,13 @@ data structure. Their asymptotic time complexity is:
 - linear relative to the number of tags queried,
 - logarithmic relative to the total number of distinct tags in the queue,
 - constant relative to the length of the queue, and
-- constant relative to the distance between successive items of the same tag.
+- constant relative to the distance between successive items with the same
+  tag.
+
+Hopscotch queues also provide flexible iterators `Iter(Mut)` to efficiently
+traverse portions of their contents, sliced by index using `Iter(Mut)::until` and
+`Iter(Mut)::after`, and filtered by set of desired tags using
+`Iter(Mut)::matching_only`.
 
 # When might I use this?
 
@@ -37,15 +50,21 @@ This queue performs well when:
   insertion/deletion operations
 - you can afford a little bit of extra memory for bookkeeping
 
+One use-case for such a structure is implementing a bounded pub/sub event buffer
+where clients interested in a particular subset of events repeatedly query for
+the next event matching their desired subset. This scenario plays to the
+strengths of a hopscotch queue, because each query can be performed very
+quickly, regardless of the contents or size of the buffer.
+
 The `push` and `pop` operations are slower by a considerable constant factor
 than their equivalents for `VecDeque<(K, T)>`, but for this price, you gain the
 ability to skip and hop between sets of tags in almost-constant time.
 
-One use-case for such a structure is implementing a bounded event buffer where
-clients interested in a particular subset of events repeatedly query for the
-next event matching their desired subset. This scenario plays to the strengths
-of a hopscotch queue, because each query can be performed very quickly,
-regardless of the contents or size of the buffer.
+In scenarios with a few hundred tags, `push` and `pop` operations on my machine
+(recent-ish MacBook Pro) take on the order of the low tens of microseconds, and
+`after`/`before` queries should take on the order of tens of nanoseconds. More
+detailed and scientific benchmarks are to come, and please feel free to
+contribute!
 
 If this is similar to your needs, this data structure might be for you!
 
