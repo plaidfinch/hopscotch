@@ -653,8 +653,14 @@ impl<K: IsEnabled + Eq + Hash + Clone, V> Queue<K, V> {
         Some(ItemMut { value, tag, index })
     }
 
-    /// Get a reference to the earliest item after or including `index` whose tag
-    /// is one of those given.
+    /// Get a reference to the earliest item after or including `index` whose
+    /// tag is one of those given.
+    ///
+    /// The `Tags` type for the list of desired tags can be anything which
+    /// implements `IntoIterator<Item = &K>`. The usual choice for this is
+    /// `&[K]` (as seen in the examples below), but in cases where there is an
+    /// extant collection of tags, you can avoid re-allocating by passing an
+    /// iterator over that same collection.
     ///
     /// # Examples
     ///
@@ -750,13 +756,14 @@ impl<K: IsEnabled + Eq + Hash + Clone, V> Queue<K, V> {
     /// assert!(queue.after(4, &[1]).is_none());
     /// assert!(queue.after(4, &[0, 1]).is_none());
     /// ```
-    pub fn after<'a, 'b>(
-        &'a self,
+    pub fn after<'a, Tags>(
+        &self,
         index: u64,
-        tags: impl IntoIterator<Item = &'b K>,
-    ) -> Option<Item<'a, K, V>>
+        tags: Tags,
+    ) -> Option<Item<K, V>>
     where
-        K: 'b,
+        Tags: IntoIterator<Item = &'a K>,
+        K: 'a,
     {
         let (value, tag, index) = after_impl!(self, index, tags)?;
         Some(Item { value, tag, index })
@@ -764,6 +771,12 @@ impl<K: IsEnabled + Eq + Hash + Clone, V> Queue<K, V> {
 
     /// Get a mutable reference to the earliest item after or including `index`
     /// whose tag is one of those given.
+    ///
+    /// The `Tags` type for the list of desired tags can be anything which
+    /// implements `IntoIterator<Item = &K>`. The usual choice for this is
+    /// `&[K]` (as seen in the examples below), but in cases where there is an
+    /// extant collection of tags, you can avoid re-allocating by passing an
+    /// iterator over that same collection.
     ///
     /// This uses the same semantics for lookup as `after`: see its
     /// documentation for more examples.
@@ -792,13 +805,14 @@ impl<K: IsEnabled + Eq + Hash + Clone, V> Queue<K, V> {
     /// assert_eq!(queue.get(1)?.as_ref(), "Au revoir");
     /// # Some(()) })().map_or_else(|| Err(()), Ok) }
     /// ```
-    pub fn after_mut<'a, 'b>(
-        &'a mut self,
+    pub fn after_mut<'a, Tags>(
+        &mut self,
         index: u64,
-        tags: impl IntoIterator<Item = &'b K>,
-    ) -> Option<ItemMut<'a, K, V>>
+        tags: Tags,
+    ) -> Option<ItemMut<K, V>>
     where
-        K: 'b,
+        Tags: IntoIterator<Item = &'a K>,
+        K: 'a,
     {
         let (value, tag, index) = after_impl!(self, index, tags, mut)?;
         Some(ItemMut { value, tag, index })
@@ -806,6 +820,12 @@ impl<K: IsEnabled + Eq + Hash + Clone, V> Queue<K, V> {
 
     /// Get a reference to the latest item before or including `index` whose tag
     /// is one of those given.
+    ///
+    /// The `Tags` type for the list of desired tags can be anything which
+    /// implements `IntoIterator<Item = &K>`. The usual choice for this is
+    /// `&[K]` (as seen in the examples below), but in cases where there is an
+    /// extant collection of tags, you can avoid re-allocating by passing an
+    /// iterator over that same collection.
     ///
     /// # Examples
     ///
@@ -905,13 +925,14 @@ impl<K: IsEnabled + Eq + Hash + Clone, V> Queue<K, V> {
     /// assert_eq!(queue.before(0, &[0, 1])?.as_ref(), "Hello");
     /// # Some(()) })().map_or_else(|| Err(()), Ok) }
     /// ```
-    pub fn before<'a, 'b>(
-        &'a self,
+    pub fn before<'a, Tags>(
+        &self,
         index: u64,
-        tags: impl IntoIterator<Item = &'b K>,
-    ) -> Option<Item<'a, K, V>>
+        tags: Tags
+    ) -> Option<Item<K, V>>
     where
-        K: 'b,
+        Tags: IntoIterator<Item = &'a K>,
+        K: 'a,
     {
         let (value, tag, index) = before_impl!(self, index, tags)?;
         Some(Item { value, tag, index })
@@ -919,6 +940,12 @@ impl<K: IsEnabled + Eq + Hash + Clone, V> Queue<K, V> {
 
     /// Get a mutable reference to the latest item before or including `index`
     /// whose tag is one of those given.
+    ///
+    /// The `Tags` type for the list of desired tags can be anything which
+    /// implements `IntoIterator<Item = &K>`. The usual choice for this is
+    /// `&[K]` (as seen in the examples below), but in cases where there is an
+    /// extant collection of tags, you can avoid re-allocating by passing an
+    /// iterator over that same collection.
     ///
     /// This uses the same semantics for lookup as `before`: see its
     /// documentation for more examples.
@@ -947,13 +974,14 @@ impl<K: IsEnabled + Eq + Hash + Clone, V> Queue<K, V> {
     /// assert_eq!(queue.get(3)?.as_ref(), "mes amis!");
     /// # Some(()) })().map_or_else(|| Err(()), Ok) }
     /// ```
-    pub fn before_mut<'a, 'b>(
-        &'a mut self,
+    pub fn before_mut<'a, Tags>(
+        &mut self,
         index: u64,
-        tags: impl IntoIterator<Item = &'b K>,
-    ) -> Option<ItemMut<'a, K, V>>
+        tags: Tags,
+    ) -> Option<ItemMut<K, V>>
     where
-        K: 'b,
+        Tags: IntoIterator<Item = &'a K>,
+        K: 'a,
     {
         let (value, tag, index) = before_impl!(self, index, tags, mut)?;
         Some(ItemMut { value, tag, index })
