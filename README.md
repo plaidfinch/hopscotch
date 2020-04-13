@@ -1,3 +1,5 @@
+# Hopscotch Queues: Skipping and Jumping Around Tagged, Ordered Data
+
 A `hopscotch::Queue<K, V>` is a first-in-first-out queue where each `Item<K, V>`
 in the queue has
 
