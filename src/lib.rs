@@ -12,11 +12,12 @@
 //! [`before`](Queue.before) (and their respective `_mut` variants):
 //!
 //! ```
-//! # struct X;
-//! # impl X {
-//! pub fn after(&self, index: u64, tags: &[K]) -> Option<Item<K, T>>
+//! use hopscotch::Item;
+//! # struct X<K, V>(K, V);
+//! # impl<K, V> X<K, V> {
+//! pub fn after(&self, index: u64, tags: &[K]) -> Option<Item<K, V>>
 //! # { panic!() }
-//! pub fn before(&self, index: u64, tags: &[K]) -> Option<Item<K, T>>
+//! pub fn before(&self, index: u64, tags: &[K]) -> Option<Item<K, V>>
 //! # { panic!() }
 //! # }
 //! ```
@@ -47,38 +48,38 @@ use std::iter::FromIterator;
 use im::hashmap::HashMap;
 use nohash_hasher::{IsEnabled, NoHashHasher};
 
-/// A hopscotch queue with keys of type `K` and items of type `T`.
+/// A hopscotch queue with keys of type `K` and items of type `V`.
 ///
 /// Note that the types of keys are constrained by the `IsEnabled` trait from
 /// the `nohash-hasher` crate, which effectively limits them to the set of
 /// primitive types: `u8, u16, u32, u64, usize, i8, i16, i32, i64, isize`.
 #[derive(Debug, Clone)]
-pub struct Queue<K: IsEnabled + Eq + Hash + Clone, T> {
+pub struct Queue<K: IsEnabled + Eq + Hash + Clone, V> {
     offset: u64,
     first_with_tag: HashMap<K, u64, BuildHasherDefault<NoHashHasher<K>>>,
     info: VecDeque<Info<K>>,
-    values: VecDeque<T>,
+    values: VecDeque<V>,
 }
 
 /// An immutable reference to an item currently in the queue.
 #[derive(Debug, Clone, PartialEq, PartialOrd, Eq, Ord, Hash)]
-pub struct Item<'a, K, T> {
+pub struct Item<'a, K, V> {
     index: u64,
     tag: &'a K,
-    value: &'a T,
+    value: &'a V,
 }
 
 /// A mutable reference to an item currently in the queue.
 #[derive(Debug, PartialEq, PartialOrd, Eq, Ord, Hash)]
-pub struct ItemMut<'a, K, T> {
+pub struct ItemMut<'a, K, V> {
     index: u64,
     tag: &'a K,
-    value: &'a mut T,
+    value: &'a mut V,
 }
 
 /// An item that has been popped from the queue.
 #[derive(Debug, Clone, PartialEq, PartialOrd, Eq, Ord, Hash)]
-pub struct Popped<K, T> {
+pub struct Popped<K, V> {
     /// The index of the item: this is unique for the entire lifetime of the
     /// queue from which this item originated.
     pub index: u64,
@@ -86,10 +87,10 @@ pub struct Popped<K, T> {
     /// inserted into the queue.
     pub tag: K,
     /// Get a mutable reference to the value contained in this item.
-    pub value: T,
+    pub value: V,
 }
 
-impl<'a, K, T> Item<'a, K, T> {
+impl<'a, K, V> Item<'a, K, V> {
     /// The index of the item: this is unique for the entire lifetime of the
     /// queue from which this item originated.
     pub fn index(&self) -> u64 {
@@ -101,12 +102,12 @@ impl<'a, K, T> Item<'a, K, T> {
         self.tag
     }
     /// Get an immutable reference to the value contained in this item.
-    pub fn value(&self) -> &'a T {
+    pub fn value(&self) -> &'a V {
         self.value
     }
 }
 
-impl<'a, K: IsEnabled + Eq + Hash + Clone, T> ItemMut<'a, K, T> {
+impl<'a, K: IsEnabled + Eq + Hash + Clone, V> ItemMut<'a, K, V> {
     /// The index of the item: this is unique for the entire lifetime of the
     /// queue from which this item originated.
     pub fn index(&self) -> u64 {
@@ -118,30 +119,30 @@ impl<'a, K: IsEnabled + Eq + Hash + Clone, T> ItemMut<'a, K, T> {
         self.tag
     }
     /// Get a mutable reference to the value contained in this item.
-    pub fn value_mut(&mut self) -> &mut T {
+    pub fn value_mut(&mut self) -> &mut V {
         self.value
     }
     /// Extract a mutable reference to the value whose lifetime is tied to
     /// the entire queue, not this `Item`.
-    pub fn into_mut(self) -> &'a mut T {
+    pub fn into_mut(self) -> &'a mut V {
         self.value
     }
 }
 
-impl<K: IsEnabled + Eq + Hash + Clone, T> AsRef<T> for Item<'_, K, T> {
-    fn as_ref(&self) -> &T {
+impl<K: IsEnabled + Eq + Hash + Clone, V> AsRef<V> for Item<'_, K, V> {
+    fn as_ref(&self) -> &V {
         self.value
     }
 }
 
-impl<K: IsEnabled + Eq + Hash + Clone, T> AsRef<T> for ItemMut<'_, K, T> {
-    fn as_ref(&self) -> &T {
+impl<K: IsEnabled + Eq + Hash + Clone, V> AsRef<V> for ItemMut<'_, K, V> {
+    fn as_ref(&self) -> &V {
         &*self.value
     }
 }
 
-impl<K: IsEnabled + Eq + Hash + Clone, T> AsMut<T> for ItemMut<'_, K, T> {
-    fn as_mut(&mut self) -> &mut T {
+impl<K: IsEnabled + Eq + Hash + Clone, V> AsMut<V> for ItemMut<'_, K, V> {
+    fn as_mut(&mut self) -> &mut V {
         self.value
     }
 }
@@ -196,7 +197,7 @@ macro_rules! before_impl {
             let index: usize = this.as_internal_index(index)?;
             let current = this.info.get(index)?;
             let previous_index =
-                tags.iter()
+                tags.into_iter()
                 .filter_map(|tag| Some(*current.previous_with_tag.get(tag)?))
                 .max()?;
             let internal_index = this.as_internal_index(previous_index)?;
@@ -266,7 +267,7 @@ macro_rules! after_impl {
     };
 }
 
-impl<K: IsEnabled + Eq + Hash + Clone, T> Queue<K, T> {
+impl<K: IsEnabled + Eq + Hash + Clone, V> Queue<K, V> {
     /// Given an external persistent index, get the current index within the
     /// internal queue that corresponds to it. This correspondence is
     /// invalidated by future changes to the queue.
@@ -293,7 +294,7 @@ impl<K: IsEnabled + Eq + Hash + Clone, T> Queue<K, T> {
     ///
     /// let mut queue: Queue<usize, usize> = Queue::new();
     /// ```
-    pub fn new() -> Queue<K, T> {
+    pub fn new() -> Queue<K, V> {
         Self::with_capacity(0)
     }
 
@@ -306,7 +307,7 @@ impl<K: IsEnabled + Eq + Hash + Clone, T> Queue<K, T> {
     ///
     /// let mut queue: Queue<usize, usize> = Queue::with_capacity(10);
     /// ```
-    pub fn with_capacity(capacity: usize) -> Queue<K, T> {
+    pub fn with_capacity(capacity: usize) -> Queue<K, V> {
         let map: HashMap<K, u64, BuildHasherDefault<NoHashHasher<K>>> =
             HashMap::with_hasher(BuildHasherDefault::default());
         Queue {
@@ -357,7 +358,7 @@ impl<K: IsEnabled + Eq + Hash + Clone, T> Queue<K, T> {
     /// let mut queue: Queue<usize, String> = Queue::new();
     /// queue.push(0, "Hello!".to_string());
     /// ```
-    pub fn push(&mut self, tag: K, value: T) -> u64 {
+    pub fn push(&mut self, tag: K, value: V) -> u64 {
         // The index we're about to push
         let pushed_index = self.next_index();
         let mut previous_with_tag = self
@@ -407,7 +408,7 @@ impl<K: IsEnabled + Eq + Hash + Clone, T> Queue<K, T> {
     /// assert_eq!(item.value, "Hello!");
     /// # Some(()) })().map_or_else(|| Err(()), Ok) }
     /// ```
-    pub fn pop(&mut self) -> Option<Popped<K, T>> {
+    pub fn pop(&mut self) -> Option<Popped<K, V>> {
         // The index of the thing that's about to get popped is equal to
         // the current offset, because the offset is incremented exactly
         // every time something is popped:
@@ -500,7 +501,7 @@ impl<K: IsEnabled + Eq + Hash + Clone, T> Queue<K, T> {
     /// assert_eq!(*queue.earliest()?.value(), 2);
     /// # Some(()) })().map_or_else(|| Err(()), Ok) }
     /// ```
-    pub fn earliest(&self) -> Option<Item<K, T>> {
+    pub fn earliest(&self) -> Option<Item<K, V>> {
         self.get(self.earliest_index())
     }
 
@@ -520,7 +521,7 @@ impl<K: IsEnabled + Eq + Hash + Clone, T> Queue<K, T> {
     /// assert_eq!(*queue.earliest()?.value(), 500);
     /// # Some(()) })().map_or_else(|| Err(()), Ok) }
     /// ```
-    pub fn earliest_mut(&mut self) -> Option<ItemMut<K, T>> {
+    pub fn earliest_mut(&mut self) -> Option<ItemMut<K, V>> {
         self.get_mut(self.earliest_index())
     }
 
@@ -537,7 +538,7 @@ impl<K: IsEnabled + Eq + Hash + Clone, T> Queue<K, T> {
     /// assert_eq!(*queue.latest()?.value(), 9);
     /// # Some(()) })().map_or_else(|| Err(()), Ok) }
     /// ```
-    pub fn latest(&self) -> Option<Item<K, T>> {
+    pub fn latest(&self) -> Option<Item<K, V>> {
         self.get(self.next_index().saturating_sub(1))
     }
 
@@ -555,7 +556,7 @@ impl<K: IsEnabled + Eq + Hash + Clone, T> Queue<K, T> {
     /// assert_eq!(*queue.latest()?.value(), 500);
     /// # Some(()) })().map_or_else(|| Err(()), Ok) }
     /// ```
-    pub fn latest_mut(&mut self) -> Option<ItemMut<K, T>> {
+    pub fn latest_mut(&mut self) -> Option<ItemMut<K, V>> {
         self.get_mut(self.next_index().saturating_sub(1))
     }
 
@@ -571,13 +572,8 @@ impl<K: IsEnabled + Eq + Hash + Clone, T> Queue<K, T> {
     /// assert_eq!(queue.contains(&5), true);
     /// assert_eq!(queue.contains(&500), false);
     /// ```
-    pub fn contains(&self, x: &T) -> bool
-    where
-        T: PartialEq,
-    {
-        self.iter_between(0, u64::max_value(), None)
-            .find(|i| x == i.value())
-            .is_some()
+    pub fn contains(&self, x: &V) -> bool where V: PartialEq {
+        self.iter().find(|i| x == i.value()).is_some()
     }
 
     /// Returns `true` if and only if the queue contains an item whose tag is
@@ -623,7 +619,7 @@ impl<K: IsEnabled + Eq + Hash + Clone, T> Queue<K, T> {
     /// queue.pop();
     /// assert!(queue.get(0).is_none());
     /// ```
-    pub fn get(&self, index: u64) -> Option<Item<K, T>> {
+    pub fn get(&self, index: u64) -> Option<Item<K, V>> {
         let (value, tag, index) = get_impl!(self, index)?;
         Some(Item { value, tag, index })
     }
@@ -652,7 +648,7 @@ impl<K: IsEnabled + Eq + Hash + Clone, T> Queue<K, T> {
     /// queue.pop();
     /// assert!(queue.get(0).is_none());
     /// ```
-    pub fn get_mut(&mut self, index: u64) -> Option<ItemMut<K, T>> {
+    pub fn get_mut(&mut self, index: u64) -> Option<ItemMut<K, V>> {
         let (value, tag, index) = get_impl!(self, index, mut)?;
         Some(ItemMut { value, tag, index })
     }
@@ -754,7 +750,14 @@ impl<K: IsEnabled + Eq + Hash + Clone, T> Queue<K, T> {
     /// assert!(queue.after(4, &[1]).is_none());
     /// assert!(queue.after(4, &[0, 1]).is_none());
     /// ```
-    pub fn after(&self, index: u64, tags: &[K]) -> Option<Item<K, T>> {
+    pub fn after<'a, 'b>(
+        &'a self,
+        index: u64,
+        tags: impl IntoIterator<Item = &'b K>,
+    ) -> Option<Item<'a, K, V>>
+    where
+        K: 'b,
+    {
         let (value, tag, index) = after_impl!(self, index, tags)?;
         Some(Item { value, tag, index })
     }
@@ -789,7 +792,14 @@ impl<K: IsEnabled + Eq + Hash + Clone, T> Queue<K, T> {
     /// assert_eq!(queue.get(1)?.as_ref(), "Au revoir");
     /// # Some(()) })().map_or_else(|| Err(()), Ok) }
     /// ```
-    pub fn after_mut(&mut self, index: u64, tags: &[K]) -> Option<ItemMut<K, T>> {
+    pub fn after_mut<'a, 'b>(
+        &'a mut self,
+        index: u64,
+        tags: impl IntoIterator<Item = &'b K>,
+    ) -> Option<ItemMut<'a, K, V>>
+    where
+        K: 'b,
+    {
         let (value, tag, index) = after_impl!(self, index, tags, mut)?;
         Some(ItemMut { value, tag, index })
     }
@@ -895,7 +905,14 @@ impl<K: IsEnabled + Eq + Hash + Clone, T> Queue<K, T> {
     /// assert_eq!(queue.before(0, &[0, 1])?.as_ref(), "Hello");
     /// # Some(()) })().map_or_else(|| Err(()), Ok) }
     /// ```
-    pub fn before(&self, index: u64, tags: &[K]) -> Option<Item<K, T>> {
+    pub fn before<'a, 'b>(
+        &'a self,
+        index: u64,
+        tags: impl IntoIterator<Item = &'b K>,
+    ) -> Option<Item<'a, K, V>>
+    where
+        K: 'b,
+    {
         let (value, tag, index) = before_impl!(self, index, tags)?;
         Some(Item { value, tag, index })
     }
@@ -930,7 +947,14 @@ impl<K: IsEnabled + Eq + Hash + Clone, T> Queue<K, T> {
     /// assert_eq!(queue.get(3)?.as_ref(), "mes amis!");
     /// # Some(()) })().map_or_else(|| Err(()), Ok) }
     /// ```
-    pub fn before_mut(&mut self, index: u64, tags: &[K]) -> Option<ItemMut<K, T>> {
+    pub fn before_mut<'a, 'b>(
+        &'a mut self,
+        index: u64,
+        tags: impl IntoIterator<Item = &'b K>,
+    ) -> Option<ItemMut<'a, K, V>>
+    where
+        K: 'b,
+    {
         let (value, tag, index) = before_impl!(self, index, tags, mut)?;
         Some(ItemMut { value, tag, index })
     }
@@ -956,10 +980,12 @@ impl<K: IsEnabled + Eq + Hash + Clone, T> Queue<K, T> {
         self.values.shrink_to_fit();
     }
 
-    /// Get an iterator of immutable items matching any of the given tags, whose
-    /// indices are inclusively between `earliest` and `latest`, in order from
-    /// lowest to highest index. If `None` is provided for `tags`, every item
-    /// between the two bounds is enumerated.
+    /// Get an iterator of immutable items currently in the queue, in insertion
+    /// order from earliest to latest.
+    ///
+    /// This iterator can be further restricted using its `after`, `until`, and
+    /// `matching_only` methods to start at a given index, terminate at a given
+    /// index, and return only certain tags, respectively.
     ///
     /// The returned iterator is double-ended, and therefore can be traversed in
     /// reverse order using the `.rev()` method.
@@ -976,35 +1002,34 @@ impl<K: IsEnabled + Eq + Hash + Clone, T> Queue<K, T> {
     ///          (1, "le monde!".to_string())].into_iter().collect();
     ///
     /// let english: Vec<&str> =
-    ///     queue.iter_between(0, u64::max_value(), Some(&[0]))
+    ///     queue
+    ///     .iter()
+    ///     .matching_only(&[0])
     ///     .map(|i| i.value().as_ref()).collect();
     /// assert_eq!(english, &["Hello", "world!"]);
     ///
     /// let all_backwards: Vec<&str> =
-    ///     queue.iter_between(0, u64::max_value(), None).rev() // <-- notice the reversal
+    ///     queue.iter().rev() // <-- notice the reversal
     ///     .map(|i| i.value().as_ref()).collect();
     /// assert_eq!(all_backwards, &["le monde!", "world!", "Bonjour", "Hello"]);
     /// ```
-    pub fn iter_between<'a, 'b>(
-        &'a self,
-        earliest: u64,
-        latest: u64,
-        tags: Option<&'b [K]>,
-    ) -> Iter<'a, 'b, K, T> {
-        let head = Some(self.next_index().saturating_sub(1).min(latest));
-        let tail = Some(self.earliest_index().max(earliest));
+    pub fn iter(&self) -> Iter<K, V, impl Iterator<Item = &'_ K> + Clone> {
+        let head = Some(self.next_index().saturating_sub(1));
+        let tail = Some(self.earliest_index());
         Iter {
             inner: self,
-            tags,
+            tags: None::<std::iter::Empty<&'_ K>>,
             head,
             tail,
         }
     }
 
-    /// Get an iterator of mutable items matching any of the given tags, whose
-    /// indices are inclusively between `earliest` and `latest`, in order from
-    /// lowest to highest index. If `None` is provided for `tags`, every item
-    /// between the two bounds is enumerated.
+    /// Get an iterator of mutable items currently in the queue, in insertion
+    /// order from earliest to latest.
+    ///
+    /// This iterator can be further restricted using its `after`, `until`, and
+    /// `matching_only` methods to start at a given index, terminate at a given
+    /// index, and return only certain tags, respectively.
     ///
     /// The returned iterator is double-ended, and therefore can be traversed in
     /// reverse order using the `.rev()` method.
@@ -1020,36 +1045,31 @@ impl<K: IsEnabled + Eq + Hash + Clone, T> Queue<K, T> {
     ///          (0, "world!".to_string()),
     ///          (1, "le monde!".to_string())].into_iter().collect();
     ///
-    /// for mut item in queue.iter_between_mut(0, u64::max_value(), Some(&[0])) {
+    /// for mut item in queue.iter_mut().matching_only(&[0]) {
     ///    *item.as_mut() = item.as_mut().to_uppercase();
     /// }
     ///
     /// let words: Vec<&str> =
-    ///     queue.iter_between(0, u64::max_value(), None)
+    ///     queue.iter()
     ///     .map(|i| i.value().as_ref()).collect();
     /// assert_eq!(words, &["HELLO", "Bonjour", "WORLD!", "le monde!"]);
     /// ```
-    pub fn iter_between_mut<'a, 'b>(
-        &'a mut self,
-        earliest: u64,
-        latest: u64,
-        tags: Option<&'b [K]>,
-    ) -> IterMut<'a, 'b, K, T> {
-        let head = Some(self.next_index().saturating_sub(1).min(latest));
-        let tail = Some(self.earliest_index().max(earliest));
+    pub fn iter_mut(&mut self) -> IterMut<K, V, impl Iterator<Item = &'_ K> + Clone> {
+        let head = Some(self.next_index().saturating_sub(1));
+        let tail = Some(self.earliest_index());
         IterMut {
             inner: self,
-            tags,
+            tags: None::<std::iter::Empty<&'_ K>>,
             head,
             tail,
         }
     }
 }
 
-impl<K: IsEnabled + Eq + Hash + Clone, T> FromIterator<(K, T)> for Queue<K, T> {
+impl<K: IsEnabled + Eq + Hash + Clone, V> FromIterator<(K, V)> for Queue<K, V> {
     fn from_iter<I>(iter: I) -> Self
     where
-        I: IntoIterator<Item = (K, T)>,
+        I: IntoIterator<Item = (K, V)>,
     {
         let iter = iter.into_iter();
         let mut queue = Queue::with_capacity(iter.size_hint().0);
@@ -1060,10 +1080,10 @@ impl<K: IsEnabled + Eq + Hash + Clone, T> FromIterator<(K, T)> for Queue<K, T> {
     }
 }
 
-impl<K: IsEnabled + Eq + Hash + Clone, T> Extend<(K, T)> for Queue<K, T> {
+impl<K: IsEnabled + Eq + Hash + Clone, V> Extend<(K, V)> for Queue<K, V> {
     fn extend<I>(&mut self, iter: I)
     where
-        I: IntoIterator<Item = (K, T)>,
+        I: IntoIterator<Item = (K, V)>,
     {
         for (tag, item) in iter {
             self.push(tag, item);
@@ -1072,21 +1092,109 @@ impl<K: IsEnabled + Eq + Hash + Clone, T> Extend<(K, T)> for Queue<K, T> {
 }
 
 /// An iterator over immutable references to items in a queue.
-pub struct Iter<'a, 'b, K: IsEnabled + Eq + Hash + Clone, T> {
-    inner: &'a Queue<K, T>,
-    tags: Option<&'b [K]>,
+#[derive(Debug, Clone)]
+pub struct Iter<'a, 'b, K, V, Tags>
+where
+    K: IsEnabled + Eq + Hash + Clone + 'b,
+    Tags: Iterator<Item = &'b K> + Clone,
+{
+    inner: &'a Queue<K, V>,
+    tags: Option<Tags>,
     head: Option<u64>,
     tail: Option<u64>,
 }
 
-impl<'a, 'b, K: IsEnabled + Eq + Hash + Clone, T> Iterator for Iter<'a, 'b, K, T> {
-    type Item = Item<'a, K, T>;
+impl<'a, 'b, K, V, T> Iter<'a, 'b, K, V, T>
+where
+    K: IsEnabled + Eq + Hash + Clone + 'b,
+    T: Iterator<Item = &'b K> + Clone,
+{
+    /// Restrict this iterator to indices greater than or equal to `earliest`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use hopscotch::Queue;
+    ///
+    /// let queue: Queue<usize, usize> = (0..=3).zip(0..=3).collect();
+    /// let vec: Vec<_> = queue.iter().after(2).map(|i| *i.value()).collect();
+    /// assert_eq!(&vec, &[2, 3]);
+    /// ```
+    pub fn after(self, earliest: u64) -> Iter<'a, 'b, K, V, T> {
+        Iter {
+            inner: self.inner,
+            tags: self.tags,
+            head: self.head,
+            tail: self.tail.map(|t| t.max(earliest)),
+        }
+    }
+
+    /// Restrict this iterator to indices less than or equal to `latest`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use hopscotch::Queue;
+    ///
+    /// let queue: Queue<usize, usize> = (0..=3).zip(0..=3).collect();
+    /// let vec: Vec<_> = queue.iter().until(1).map(|i| *i.value()).collect();
+    /// assert_eq!(&vec, &[0, 1]);
+    /// ```
+    pub fn until(self, latest: u64) -> Iter<'a, 'b, K, V, T> {
+        Iter {
+            inner: self.inner,
+            tags: self.tags,
+            head: self.head.map(|h| h.min(latest)),
+            tail: self.tail,
+        }
+    }
+
+    /// Restrict this iterator to tags in the given list of tags.
+    ///
+    /// This has the same efficiency characteristics as the `before` and `after`
+    /// methods: each item is produced in constant time relative to the distance
+    /// between matching tags.
+    ///
+    ///  If `matching_only` is called twice, the set of tags given in the second
+    ///  call completely overrides those given in the first.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use hopscotch::Queue;
+    ///
+    /// let queue: Queue<usize, usize> =
+    ///     [0, 1, 0, 1].iter().copied().zip(0..=3).collect();
+    /// let vec: Vec<_> =
+    ///     queue.iter().matching_only(&[1]).map(|i| *i.value()).collect();
+    /// assert_eq!(&vec, &[1, 3]);
+    /// ```
+    pub fn matching_only<Tags>(self, tags: Tags) -> Iter<'a, 'b, K, V, Tags::IntoIter>
+    where
+        Tags: IntoIterator<Item = &'b K>,
+        Tags::IntoIter: Clone,
+    {
+        Iter {
+            inner: self.inner,
+            tags: Some(tags.into_iter()),
+            head: self.head,
+            tail: self.tail
+        }
+    }
+}
+
+impl<'a, 'b, K, V, Tags> Iterator for Iter<'a, 'b, K, V, Tags>
+where
+    K: IsEnabled + Eq + Hash + Clone + 'b,
+    Tags: Iterator<Item = &'b K> + Clone,
+{
+    type Item = Item<'a, K, V>;
 
     fn next(&mut self) -> Option<Self::Item> {
         if self.tail? > self.head? {
             return None;
         }
-        let item = if let Some(tags) = self.tags {
+        let item = if let Some(tags) = self.tags.clone() {
             self.inner.after(self.tail?, tags)
         } else {
             self.inner.get(self.tail?)
@@ -1099,12 +1207,16 @@ impl<'a, 'b, K: IsEnabled + Eq + Hash + Clone, T> Iterator for Iter<'a, 'b, K, T
     }
 }
 
-impl<'a, 'b, K: IsEnabled + Eq + Hash + Clone, T> DoubleEndedIterator for Iter<'a, 'b, K, T> {
+impl<'a, 'b, K, V, Tags> DoubleEndedIterator for Iter<'a, 'b, K, V, Tags>
+where
+    K: IsEnabled + Eq + Hash + Clone + 'b,
+    Tags: Iterator<Item = &'b K> + Clone,
+{
     fn next_back(&mut self) -> Option<Self::Item> {
         if self.tail? > self.head? {
             return None;
         }
-        let item = if let Some(tags) = self.tags {
+        let item = if let Some(tags) = self.tags.clone() {
             self.inner.before(self.head?, tags)
         } else {
             self.inner.get(self.head?)
@@ -1118,11 +1230,103 @@ impl<'a, 'b, K: IsEnabled + Eq + Hash + Clone, T> DoubleEndedIterator for Iter<'
 }
 
 /// An iterator over mutable references to items in a queue.
-pub struct IterMut<'a, 'b, K: IsEnabled + Eq + Hash + Clone + 'a, T: 'a> {
-    inner: &'a mut Queue<K, T>,
-    tags: Option<&'b [K]>,
+#[derive(Debug)]
+pub struct IterMut<'a, 'b, K, V, Tags>
+where
+    K: IsEnabled + Eq + Hash + Clone + 'b,
+    Tags: Iterator<Item = &'b K> + Clone,
+{
+    inner: &'a mut Queue<K, V>,
+    tags: Option<Tags>,
     head: Option<u64>,
     tail: Option<u64>,
+}
+
+impl<'a, 'b, K, V, T> IterMut<'a, 'b, K, V, T>
+where
+    K: IsEnabled + Eq + Hash + Clone + 'b,
+    T: Iterator<Item = &'b K> + Clone,
+{
+    /// Restrict this iterator to indices greater than or equal to `earliest`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use hopscotch::Queue;
+    ///
+    /// let mut queue: Queue<usize, usize> = (0..=3).zip(0..=3).collect();
+    /// for mut item in queue.iter_mut().after(2) {
+    ///    *item.value_mut() *= 1000;
+    /// }
+    /// let vec: Vec<_> = queue.iter().map(|i| *i.value()).collect();
+    /// assert_eq!(&vec, &[0, 1, 2000, 3000]);
+    /// ```
+    pub fn after(self, earliest: u64) -> IterMut<'a, 'b, K, V, T> {
+        IterMut {
+            inner: self.inner,
+            tags: self.tags,
+            head: self.head,
+            tail: self.tail.map(|t| t.max(earliest)),
+        }
+    }
+
+    /// Restrict this iterator to indices less than or equal to `latest`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use hopscotch::Queue;
+    ///
+    /// let mut queue: Queue<usize, usize> = (0..=3).zip(0..=3).collect();
+    /// for mut item in queue.iter_mut().until(1) {
+    ///    *item.value_mut() += 1000;
+    /// }
+    /// let vec: Vec<_> = queue.iter().map(|i| *i.value()).collect();
+    /// assert_eq!(&vec, &[1000, 1001, 2, 3]);
+    /// ```
+    pub fn until(self, latest: u64) -> IterMut<'a, 'b, K, V, T> {
+        IterMut {
+            inner: self.inner,
+            tags: self.tags,
+            head: self.head.map(|h| h.min(latest)),
+            tail: self.tail,
+        }
+    }
+
+    /// Restrict this iterator to tags in the given list of tags.
+    ///
+    /// This has the same efficiency characteristics as the `before` and `after`
+    /// methods: each item is produced in constant time relative to the distance
+    /// between matching tags.
+    ///
+    ///  If `matching_only` is called twice, the set of tags given in the second
+    ///  call completely overrides those given in the first.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use hopscotch::Queue;
+    ///
+    /// let mut queue: Queue<usize, usize> =
+    ///     [0, 1, 0, 1].iter().copied().zip(0..=3).collect();
+    /// for mut item in queue.iter_mut().matching_only(&[1]) {
+    ///    *item.value_mut() *= 1000;
+    /// }
+    /// let vec: Vec<_> = queue.iter().map(|i| *i.value()).collect();
+    /// assert_eq!(&vec, &[0, 1000, 2, 3000]);
+    /// ```
+    pub fn matching_only<Tags>(self, tags: Tags) -> IterMut<'a, 'b, K, V, Tags::IntoIter>
+    where
+        Tags: IntoIterator<Item = &'b K>,
+        Tags::IntoIter: Clone,
+    {
+        IterMut {
+            inner: self.inner,
+            tags: Some(tags.into_iter()),
+            head: self.head,
+            tail: self.tail
+        }
+    }
 }
 
 // A note on unsafe blocks below: the potential unsafety here would result from
@@ -1130,14 +1334,16 @@ pub struct IterMut<'a, 'b, K: IsEnabled + Eq + Hash + Clone + 'a, T: 'a> {
 // index is always incremented by at least one, which means we'll never produce
 // the same thing again -- even in the DoubleEndedIterator case.
 
-impl<'a, 'b, K: IsEnabled + Eq + Hash + Clone, T> Iterator for IterMut<'a, 'b, K, T> {
-    type Item = ItemMut<'a, K, T>;
+impl<'a, 'b, K: IsEnabled + Eq + Hash + Clone + 'b, V, Tags: Iterator<Item = &'b K> + Clone>
+    Iterator for IterMut<'a, 'b, K, V, Tags>
+{
+    type Item = ItemMut<'a, K, V>;
 
-    fn next(&'_ mut self) -> Option<ItemMut<'a, K, T>> {
+    fn next(&'_ mut self) -> Option<ItemMut<'a, K, V>> {
         if self.tail? > self.head? {
             return None;
         }
-        let item = if let Some(tags) = self.tags {
+        let item = if let Some(tags) = self.tags.clone() {
             self.inner.after_mut(self.tail?, tags)
         } else {
             self.inner.get_mut(self.tail?)
@@ -1154,12 +1360,14 @@ impl<'a, 'b, K: IsEnabled + Eq + Hash + Clone, T> Iterator for IterMut<'a, 'b, K
     }
 }
 
-impl<'a, 'b, K: IsEnabled + Eq + Hash + Clone, T> DoubleEndedIterator for IterMut<'a, 'b, K, T> {
+impl<'a, 'b, K: IsEnabled + Eq + Hash + Clone + 'b, V, Tags: Iterator<Item = &'b K> + Clone> DoubleEndedIterator
+    for IterMut<'a, 'b, K, V, Tags>
+{
     fn next_back(&mut self) -> Option<Self::Item> {
         if self.tail? > self.head? {
             return None;
         }
-        let item = if let Some(tags) = self.tags {
+        let item = if let Some(tags) = self.tags.clone() {
             self.inner.before_mut(self.head?, tags)
         } else {
             self.inner.get_mut(self.head?)

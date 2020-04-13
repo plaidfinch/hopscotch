@@ -34,7 +34,7 @@ where
 /// Simulate the iter_between(_mut) method for queues using the iterator for
 /// `Vec` as a test case.
 fn vec_iter_between<'a, T: Clone>(
-    tags: &'a Option<&'a [usize]>,
+    tags: Option<Vec<usize>>,
     lo: usize,
     hi: usize,
     vec: &'a [(usize, T)],
@@ -43,7 +43,9 @@ fn vec_iter_between<'a, T: Clone>(
         .cloned()
         .enumerate()
         .filter(move |(i, (t, _))| {
-            (tags.is_none() || tags.unwrap().contains(&t)) && *i <= lo.max(hi) && *i >= lo.min(hi)
+            (tags.is_none() || tags.as_ref().unwrap().contains(&t))
+                && *i <= lo.max(hi)
+                && *i >= lo.min(hi)
         })
         .map(|p| p.1)
 }
@@ -57,18 +59,25 @@ quickcheck! {
         lo: usize,
         hi: usize
     ) -> bool {
-        let tags = if let Some(tags) = option_tags.as_ref() {
-            Some(tags.as_slice())
-        } else {
-            None
-        };
         let queue: hopscotch::Queue<usize, usize> =
             input.clone().into_iter().collect();
-        let queue_iter =
-            queue.iter_between(lo.min(hi) as u64, lo.max(hi) as u64, tags)
-            .map(|i| (*i.tag(), *i.as_ref()));
-        let vec_iter = vec_iter_between(&tags, lo, hi, &input);
-        compare_double_ended_iters(queue_iter, vec_iter, ordering.into_iter())
+        let vec_iter = vec_iter_between(option_tags.clone(), lo, hi, &input);
+        if let Some(tags) = option_tags {
+            let queue_iter =
+                queue.iter()
+                .after(lo.min(hi) as u64)
+                .until(lo.max(hi) as u64)
+                .matching_only(&tags)
+                .map(|i| (*i.tag(), *i.as_ref()));
+            compare_double_ended_iters(queue_iter, vec_iter, ordering.into_iter())
+        } else {
+            let queue_iter =
+                queue.iter()
+                .after(lo.min(hi) as u64)
+                .until(lo.max(hi) as u64)
+                .map(|i| (*i.tag(), *i.as_ref()));
+            compare_double_ended_iters(queue_iter, vec_iter, ordering.into_iter())
+        }
     }
 
     fn iter_mut_correct(
@@ -78,18 +87,25 @@ quickcheck! {
         lo: usize,
         hi: usize
     ) -> bool {
-        let tags = if let Some(tags) = option_tags.as_ref() {
-            Some(tags.as_slice())
-        } else {
-            None
-        };
         let mut queue: hopscotch::Queue<usize, usize> =
             input.clone().into_iter().collect();
-        let queue_iter =
-            queue.iter_between_mut(lo.min(hi) as u64, lo.max(hi) as u64, tags)
-            .map(|mut i| (*i.tag(), *i.as_mut()));
-        let vec_iter = vec_iter_between(&tags, lo, hi, &input);
-        compare_double_ended_iters(queue_iter, vec_iter, ordering.into_iter())
+        let vec_iter = vec_iter_between(option_tags.clone(), lo, hi, &input);
+        if let Some(tags) = option_tags {
+            let queue_iter =
+                queue.iter_mut()
+                .after(lo.min(hi) as u64)
+                .until(lo.max(hi) as u64)
+                .matching_only(&tags)
+                .map(|i| (*i.tag(), *i.as_ref()));
+            compare_double_ended_iters(queue_iter, vec_iter, ordering.into_iter())
+        } else {
+            let queue_iter =
+                queue.iter_mut()
+                .after(lo.min(hi) as u64)
+                .until(lo.max(hi) as u64)
+                .map(|i| (*i.tag(), *i.as_ref()));
+            compare_double_ended_iters(queue_iter, vec_iter, ordering.into_iter())
+        }
     }
 }
 
