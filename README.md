@@ -63,10 +63,11 @@ than their equivalents for `VecDeque<(K, T)>`, but for this price, you gain the
 ability to skip and hop between sets of tags in almost-constant time.
 
 In scenarios with a few hundred tags, `push` and `pop` operations on my machine
-(recent-ish MacBook Pro) take on the order of the low tens of microseconds, and
-`after`/`before` queries should take on the order of tens of nanoseconds. More
-detailed and scientific benchmarks are to come, and please feel free to
-contribute!
+(recent-ish MacBook Pro) take on the order of low single-digits of microseconds
+(hundreds of thousands of operations per second), and `after`/`before` queries
+take on the order of tens of nanoseconds (tens of millions of operations per
+second), depending on the number of tags present in the queue. More detailed and
+scientific benchmarks are to come, and please feel free to contribute!
 
 If this is similar to your needs, this data structure might be for you!
 
