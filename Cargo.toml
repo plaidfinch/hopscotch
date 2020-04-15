@@ -22,8 +22,12 @@ harness = false
 
 [dependencies]
 rpds = "0.7"
+archery = "0.3"
 
 [dev-dependencies]
 quickcheck = "0.9"
 criterion = "0.3"
 rand = "0.7"
+tokio = { version = "0.2", features = ["full"] }
+uuid = { version = "0.8", features = ["v4"] }
+rust-embed = "5.5"
