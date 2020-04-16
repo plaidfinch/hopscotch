@@ -1054,7 +1054,7 @@ impl<K: Ord + Clone, V, P: SharedPointerKind> Queue<K, V, P> {
     ///     .map(|i| i.value().as_ref()).collect();
     /// assert_eq!(all_backwards, &["le monde!", "world!", "Bonjour", "Hello"]);
     /// ```
-    pub fn iter(&self) -> Iter<K, V, P, impl Iterator<Item = &'_ K> + Clone> {
+    pub fn iter(&self) -> Iter<K, V, impl Iterator<Item = &'_ K> + Clone, P> {
         let head = Some(self.next_index().saturating_sub(1));
         let tail = Some(self.earliest_index());
         Iter {
@@ -1095,7 +1095,7 @@ impl<K: Ord + Clone, V, P: SharedPointerKind> Queue<K, V, P> {
     ///     .map(|i| i.value().as_ref()).collect();
     /// assert_eq!(words, &["HELLO", "Bonjour", "WORLD!", "le monde!"]);
     /// ```
-    pub fn iter_mut(&mut self) -> IterMut<K, V, P, impl Iterator<Item = &'_ K> + Clone> {
+    pub fn iter_mut(&mut self) -> IterMut<K, V, impl Iterator<Item = &'_ K> + Clone, P> {
         let head = Some(self.next_index().saturating_sub(1));
         let tail = Some(self.earliest_index());
         IterMut {
@@ -1134,7 +1134,7 @@ impl<K: Ord + Clone, V, P: SharedPointerKind> Extend<(K, V)> for Queue<K, V, P> 
 
 /// An iterator over immutable references to items in a queue.
 #[derive(Clone)]
-pub struct Iter<'a, 'b, K, V, P, Tags>
+pub struct Iter<'a, 'b, K, V, Tags, P = RcK>
 where
     P: SharedPointerKind,
     K: Ord + Clone + 'b,
@@ -1146,7 +1146,7 @@ where
     tail: Option<u64>,
 }
 
-impl<'a, 'b, K, V, P, T> Iter<'a, 'b, K, V, P, T>
+impl<'a, 'b, K, V, T, P> Iter<'a, 'b, K, V, T, P>
 where
     P: SharedPointerKind,
     K: Ord + Clone + 'b,
@@ -1163,7 +1163,7 @@ where
     /// let vec: Vec<_> = queue.iter().after(2).map(|i| *i.value()).collect();
     /// assert_eq!(&vec, &[2, 3]);
     /// ```
-    pub fn after(self, earliest: u64) -> Iter<'a, 'b, K, V, P, T> {
+    pub fn after(self, earliest: u64) -> Iter<'a, 'b, K, V, T, P> {
         Iter {
             inner: self.inner,
             tags: self.tags,
@@ -1183,7 +1183,7 @@ where
     /// let vec: Vec<_> = queue.iter().until(1).map(|i| *i.value()).collect();
     /// assert_eq!(&vec, &[0, 1]);
     /// ```
-    pub fn until(self, latest: u64) -> Iter<'a, 'b, K, V, P, T> {
+    pub fn until(self, latest: u64) -> Iter<'a, 'b, K, V, T, P> {
         Iter {
             inner: self.inner,
             tags: self.tags,
@@ -1212,7 +1212,7 @@ where
     ///     queue.iter().matching_only(&[1]).map(|i| *i.value()).collect();
     /// assert_eq!(&vec, &[1, 3]);
     /// ```
-    pub fn matching_only<Tags>(self, tags: Tags) -> Iter<'a, 'b, K, V, P, Tags::IntoIter>
+    pub fn matching_only<Tags>(self, tags: Tags) -> Iter<'a, 'b, K, V, Tags::IntoIter, P>
     where
         Tags: IntoIterator<Item = &'b K>,
         Tags::IntoIter: Clone,
@@ -1226,7 +1226,7 @@ where
     }
 }
 
-impl<'a, 'b, K, V, P, Tags> Iterator for Iter<'a, 'b, K, V, P, Tags>
+impl<'a, 'b, K, V, Tags, P> Iterator for Iter<'a, 'b, K, V, Tags, P>
 where
     P: SharedPointerKind,
     K: Ord + Clone + 'b,
@@ -1251,7 +1251,7 @@ where
     }
 }
 
-impl<'a, 'b, K, V, P, Tags> DoubleEndedIterator for Iter<'a, 'b, K, V, P, Tags>
+impl<'a, 'b, K, V, Tags, P> DoubleEndedIterator for Iter<'a, 'b, K, V, Tags, P>
 where
     P: SharedPointerKind,
     K: Ord + Clone + 'b,
@@ -1275,7 +1275,7 @@ where
 }
 
 /// An iterator over mutable references to items in a queue.
-pub struct IterMut<'a, 'b, K, V, P, Tags>
+pub struct IterMut<'a, 'b, K, V, Tags, P = RcK>
 where
     P: SharedPointerKind,
     K: Ord + Clone + 'b,
@@ -1287,7 +1287,7 @@ where
     tail: Option<u64>,
 }
 
-impl<'a, 'b, K, V, P, T> IterMut<'a, 'b, K, V, P, T>
+impl<'a, 'b, K, V, T, P> IterMut<'a, 'b, K, V, T, P>
 where
     P: SharedPointerKind,
     K: Ord + Clone + 'b,
@@ -1307,7 +1307,7 @@ where
     /// let vec: Vec<_> = queue.iter().map(|i| *i.value()).collect();
     /// assert_eq!(&vec, &[0, 1, 2000, 3000]);
     /// ```
-    pub fn after(self, earliest: u64) -> IterMut<'a, 'b, K, V, P, T> {
+    pub fn after(self, earliest: u64) -> IterMut<'a, 'b, K, V, T, P> {
         IterMut {
             inner: self.inner,
             tags: self.tags,
@@ -1330,7 +1330,7 @@ where
     /// let vec: Vec<_> = queue.iter().map(|i| *i.value()).collect();
     /// assert_eq!(&vec, &[1000, 1001, 2, 3]);
     /// ```
-    pub fn until(self, latest: u64) -> IterMut<'a, 'b, K, V, P, T> {
+    pub fn until(self, latest: u64) -> IterMut<'a, 'b, K, V, T, P> {
         IterMut {
             inner: self.inner,
             tags: self.tags,
@@ -1361,7 +1361,7 @@ where
     /// let vec: Vec<_> = queue.iter().map(|i| *i.value()).collect();
     /// assert_eq!(&vec, &[0, 1000, 2, 3000]);
     /// ```
-    pub fn matching_only<Tags>(self, tags: Tags) -> IterMut<'a, 'b, K, V, P, Tags::IntoIter>
+    pub fn matching_only<Tags>(self, tags: Tags) -> IterMut<'a, 'b, K, V, Tags::IntoIter, P>
     where
         Tags: IntoIterator<Item = &'b K>,
         Tags::IntoIter: Clone,
@@ -1380,7 +1380,7 @@ where
 // index is always incremented by at least one, which means we'll never produce
 // the same thing again -- even in the DoubleEndedIterator case.
 
-impl<'a, 'b, K, V, P, Tags> Iterator for IterMut<'a, 'b, K, V, P, Tags>
+impl<'a, 'b, K, V, Tags, P> Iterator for IterMut<'a, 'b, K, V, Tags, P>
 where
     P: SharedPointerKind,
     K: Ord + Clone + 'b,
@@ -1409,7 +1409,7 @@ where
     }
 }
 
-impl<'a, 'b, K, V, P, Tags> DoubleEndedIterator for IterMut<'a, 'b, K, V, P, Tags>
+impl<'a, 'b, K, V, Tags, P> DoubleEndedIterator for IterMut<'a, 'b, K, V, Tags, P>
 where
     P: SharedPointerKind,
     K: Ord + Clone + 'b,

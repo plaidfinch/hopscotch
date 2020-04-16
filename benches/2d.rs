@@ -3,7 +3,7 @@
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 use rand::Rng;
 
-use hopscotch::Queue;
+use hopscotch::{Queue, ArcK};
 
 fn random_tags(width: usize) -> impl Iterator<Item = usize> {
     let mut rng = rand::thread_rng();
@@ -90,7 +90,7 @@ fn bench_queue(c: &mut Criterion) {
         group.sample_size(samples);
         group.bench_with_input(id, &width, |b, width| {
             let tags = random_tags(*width).take(LENGTH);
-            let mut queue: Queue<usize, ()> = unit_queue_from_tags(tags);
+            let mut queue = unit_queue_from_tags(tags);
             b.iter(|| {
                 let popped = queue.pop().unwrap();
                 queue.push(popped.tag, black_box(()))
