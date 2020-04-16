@@ -63,14 +63,18 @@ pub use archery::{SharedPointerKind, RcK, ArcK};
 
 /// A hopscotch queue with keys of type `K` and items of type `V`.
 ///
-/// By default, queues use [`Rc`](std::rc::Rc) smart pointers internally, but
-/// this prevents them from implementing [`Sync`] and [`Send`], which means they
-/// cannot be sent across thread boundaries. Thanks to the
-/// [`archery`](http://www.crates.io/crates/archery) crate, in contexts where
-/// you want [`Queue`] to implement [`Sync`] and [`Send`], you can instantiate
-/// the third type parameter `P` to [`ArcK`](archery::ArcK) instead of its
-/// default value of [`RcK`](archery::RcK) (these types are re-exported from
-/// `archery` for convenience).
+/// **A note on pointers:** By default, queues use [`Rc`](std::rc::Rc) smart
+/// pointers internally, but this prevents them from implementing [`Sync`] and
+/// [`Send`], which means they cannot be sent across thread boundaries. Thanks
+/// to the [`archery`](http://www.crates.io/crates/archery) crate, in contexts
+/// where you want [`Queue`] to implement [`Sync`] and [`Send`], you can
+/// instantiate the third type parameter `P` to [`ArcK`](archery::ArcK) instead
+/// of its default value of [`RcK`](archery::RcK) (these types are re-exported
+/// from `archery` for convenience). As of last benchmarking, using the
+/// [`Arc`](std::sync::Arc) variant imposes an approximate 15% extra cost for
+/// mutation operations ([`push`](Queue::push) and [`pop`](Queue::pop)), and
+/// negligible extra cost for access operations ([`get`](Queue::get),
+/// [`after`](Queue::before), [`before`](Queue::before), etc.).
 #[derive(Clone)]
 pub struct Queue<K: Ord, V, P: SharedPointerKind = RcK> {
     offset: u64,
@@ -686,7 +690,7 @@ impl<K: Ord + Clone, V, P: SharedPointerKind> Queue<K, V, P> {
     /// tag is one of those given.
     ///
     /// The `Tags` type for the list of desired tags can be anything which
-    /// implements `IntoIterator<Item = &K>`. The usual choice for this is
+    /// implements [`IntoIterator`]`<Item = &K>`. The usual choice for this is
     /// `&[K]` (as seen in the examples below), but in cases where there is an
     /// extant collection of tags, you can avoid re-allocating by passing an
     /// iterator over that same collection.
@@ -798,7 +802,7 @@ impl<K: Ord + Clone, V, P: SharedPointerKind> Queue<K, V, P> {
     /// whose tag is one of those given.
     ///
     /// The `Tags` type for the list of desired tags can be anything which
-    /// implements `IntoIterator<Item = &K>`. The usual choice for this is
+    /// implements [`IntoIterator`]`<Item = &K>`. The usual choice for this is
     /// `&[K]` (as seen in the examples below), but in cases where there is an
     /// extant collection of tags, you can avoid re-allocating by passing an
     /// iterator over that same collection.
@@ -843,7 +847,7 @@ impl<K: Ord + Clone, V, P: SharedPointerKind> Queue<K, V, P> {
     /// is one of those given.
     ///
     /// The `Tags` type for the list of desired tags can be anything which
-    /// implements `IntoIterator<Item = &K>`. The usual choice for this is
+    /// implements [`IntoIterator`]`<Item = &K>`. The usual choice for this is
     /// `&[K]` (as seen in the examples below), but in cases where there is an
     /// extant collection of tags, you can avoid re-allocating by passing an
     /// iterator over that same collection.
@@ -959,7 +963,7 @@ impl<K: Ord + Clone, V, P: SharedPointerKind> Queue<K, V, P> {
     /// whose tag is one of those given.
     ///
     /// The `Tags` type for the list of desired tags can be anything which
-    /// implements `IntoIterator<Item = &K>`. The usual choice for this is
+    /// implements [`IntoIterator`]`<Item = &K>`. The usual choice for this is
     /// `&[K]` (as seen in the examples below), but in cases where there is an
     /// extant collection of tags, you can avoid re-allocating by passing an
     /// iterator over that same collection.
@@ -1024,12 +1028,14 @@ impl<K: Ord + Clone, V, P: SharedPointerKind> Queue<K, V, P> {
     /// Get an iterator of immutable items currently in the queue, in insertion
     /// order from earliest to latest.
     ///
-    /// This iterator can be further restricted using its `after`, `until`, and
-    /// `matching_only` methods to start at a given index, terminate at a given
-    /// index, and return only certain tags, respectively.
+    /// This iterator can be further restricted using its
+    /// [`after`](Iter::after), [`until`](Iter::until), and
+    /// [`matching_only`](Iter::matching_only) methods to start at a given
+    /// index, terminate at a given index, and return only certain tags,
+    /// respectively.
     ///
     /// The returned iterator is double-ended, and therefore can be traversed in
-    /// reverse order using the `.rev()` method.
+    /// reverse order using the [`.rev()`](Iterator::rev) method.
     ///
     /// # Examples
     ///
@@ -1068,12 +1074,14 @@ impl<K: Ord + Clone, V, P: SharedPointerKind> Queue<K, V, P> {
     /// Get an iterator of mutable items currently in the queue, in insertion
     /// order from earliest to latest.
     ///
-    /// This iterator can be further restricted using its `after`, `until`, and
-    /// `matching_only` methods to start at a given index, terminate at a given
-    /// index, and return only certain tags, respectively.
+    /// This iterator can be further restricted using its
+    /// [`after`](IterMut::after), [`until`](IterMut::until), and
+    /// [`matching_only`](IterMut::matching_only) methods to start at a given
+    /// index, terminate at a given index, and return only certain tags,
+    /// respectively.
     ///
     /// The returned iterator is double-ended, and therefore can be traversed in
-    /// reverse order using the `.rev()` method.
+    /// reverse order using the [`.rev()`](Iterator::rev) method.
     ///
     /// # Examples
     ///
@@ -1132,7 +1140,8 @@ impl<K: Ord + Clone, V, P: SharedPointerKind> Extend<(K, V)> for Queue<K, V, P> 
     }
 }
 
-/// An iterator over immutable references to items in a queue.
+/// An iterator over immutable references to items in a queue. Created by
+/// [`Queue::iter`].
 #[derive(Clone)]
 pub struct Iter<'a, 'b, K, V, Tags, P = RcK>
 where
@@ -1194,9 +1203,9 @@ where
 
     /// Restrict this iterator to tags in the given list of tags.
     ///
-    /// This has the same efficiency characteristics as the `before` and `after`
-    /// methods: each item is produced in constant time relative to the distance
-    /// between matching tags.
+    /// This results in the same efficiency characteristics as the
+    /// [`Queue::before`] and [`Queue::after`] methods: each item is produced in
+    /// constant time relative to the distance between matching tags.
     ///
     ///  If `matching_only` is called twice, the set of tags given in the second
     ///  call completely overrides those given in the first.
@@ -1274,7 +1283,8 @@ where
     }
 }
 
-/// An iterator over mutable references to items in a queue.
+/// An iterator over mutable references to items in a queue. Created by
+/// [`Queue::iter_mut`].
 pub struct IterMut<'a, 'b, K, V, Tags, P = RcK>
 where
     P: SharedPointerKind,
@@ -1341,9 +1351,9 @@ where
 
     /// Restrict this iterator to tags in the given list of tags.
     ///
-    /// This has the same efficiency characteristics as the `before` and `after`
-    /// methods: each item is produced in constant time relative to the distance
-    /// between matching tags.
+    /// This results in the same efficiency characteristics as the
+    /// [`Queue::before`] and [`Queue::after`] methods: each item is produced in
+    /// constant time relative to the distance between matching tags.
     ///
     ///  If `matching_only` is called twice, the set of tags given in the second
     ///  call completely overrides those given in the first.
