@@ -1,0 +1,3 @@
+[submodule "examples/wordlists"]
+	path = examples/wordlists
+	url = https://github.com/imsky/wordlists
