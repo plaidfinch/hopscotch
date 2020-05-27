@@ -1,17 +1,17 @@
 use hopscotch::{self, ArcK};
+use rand::Rng;
 use rust_embed::RustEmbed;
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::hash::Hash;
 use std::sync::Arc;
+use std::time::Duration;
+use structopt::StructOpt;
 use tokio;
+use tokio::join;
 use tokio::sync::oneshot::{self, Sender};
 use tokio::sync::{Mutex, RwLock};
 use tokio::time;
-use tokio::join;
-use std::time::Duration;
 use uuid::Uuid;
-use std::hash::Hash;
-use rand::Rng;
-use structopt::StructOpt;
 
 /// A demo program using hopscotch::Queue to implement a publish/subscribe
 /// system with long-polling semantics.
@@ -53,18 +53,16 @@ struct Options {
 }
 
 const HORIZONTAL_RULE: &str =
-    "────────────────────────────────────────\
-     ────────────────────────────────────────";
+    "────────────────────────────────────────────────────────────────────────────────";
 
 #[tokio::main]
 async fn main() {
     let options = Options::from_args();
     let words: &'static _ = Box::leak(Box::new(load_words()));
-    let events: Arc<Events<String, String>> =
-        Arc::new(Events::with_capacity(options.buffer_size));
+    let events: Arc<Events<String, String>> = Arc::new(Events::with_capacity(options.buffer_size));
 
     let mut categories = Vec::with_capacity(options.query_size);
-    for _ in 0 .. options.query_size {
+    for _ in 0..options.query_size {
         categories.push(random_key(&words));
     }
     println!("{}", HORIZONTAL_RULE);
@@ -79,8 +77,7 @@ async fn main() {
     let push_words = words.clone();
     let push_events = events.clone();
     let f = tokio::spawn(async move {
-        let mut interval =
-            time::interval(Duration::from_millis(options.publish_millis));
+        let mut interval = time::interval(Duration::from_millis(options.publish_millis));
         loop {
             let (category, word) = random_key_val(&push_words);
             push_events.push(category.clone(), word.clone()).await;
@@ -95,11 +92,11 @@ async fn main() {
         let mut index = 0;
         let tags = categories.into_iter();
         loop {
-            let (event_index, category, word) =
-                events.after(index, tags.clone()).await;
+            let (event_index, category, word) = events.after(index, tags.clone()).await;
             println!("{}: {}", category, word);
             index = event_index + 1;
-            tokio::time::delay_for(Duration::from_millis(options.poll_millis)).await;
+            let delay = Duration::from_millis(options.poll_millis);
+            tokio::time::delay_for(delay).await;
         }
     });
 
@@ -145,7 +142,8 @@ impl<K: Ord + Clone, V> Events<K, V> {
                     .id_sender
                     .remove(&id)
                     .map(|sender| sender.send((index, tag.clone(), value.clone())))
-                    .unwrap_or(Ok(())).unwrap_or(());
+                    .unwrap_or(Ok(()))
+                    .unwrap_or(());
             }
         }
         buffer.push(tag, value);

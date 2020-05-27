@@ -5,12 +5,14 @@ fn main() {
     let mut count = 0;
     let mut buffer: Queue<usize, usize> = Queue::new();
     println!("Debug REPL for hopscotch::Queue<usize, usize>");
-    println!("Available commands:\n  \
-                • push <usize>\n  \
-                • pop\n  \
-                • after <u64> [<usize> ...]\n  \
-                • before <u64> [<usize> ...]\n  \
-                • exit");
+    println!(
+        "Available commands:\n  \
+           • push <usize>\n  \
+           • pop\n  \
+           • after <u64> [<usize> ...]\n  \
+           • before <u64> [<usize> ...]\n  \
+           • exit"
+    );
     loop {
         print!("> ");
         io::stdout().flush().unwrap();

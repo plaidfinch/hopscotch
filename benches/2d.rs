@@ -3,7 +3,7 @@
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 use rand::Rng;
 
-use hopscotch::{Queue, ArcK};
+use hopscotch::{ArcK, Queue};
 
 fn random_tags(width: usize) -> impl Iterator<Item = usize> {
     let mut rng = rand::thread_rng();

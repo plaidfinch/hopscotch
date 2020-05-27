@@ -59,7 +59,7 @@ use std::collections::{BTreeMap, VecDeque};
 use std::convert::TryInto;
 use std::iter::FromIterator;
 
-pub use archery::{SharedPointerKind, RcK, ArcK};
+pub use archery::{ArcK, RcK, SharedPointerKind};
 
 /// A hopscotch queue with keys of type `K` and items of type `V`.
 ///
