@@ -11,19 +11,76 @@ use std::time::Duration;
 use uuid::Uuid;
 use std::hash::Hash;
 use rand::Rng;
+use structopt::StructOpt;
+
+/// A demo program using hopscotch::Queue to implement a publish/subscribe
+/// system with long-polling semantics.
+///
+/// At a recurring interval, this program picks a random word from a random
+/// "category" of words, and inserts it into a hopscotch::Queue. Another thread,
+/// listening for some subset of categories, awaits the arrival of a word in the
+/// categories it cares about, then delays for a fixed interval after receiving
+/// such a word (simulating "doing work" with that data), then awaits another
+/// word among its chosen categories.
+///
+/// Depending on the publication interval, the number of categories desired by
+/// the subscriber, and the processing delay, a greater or lesser proportion of
+/// queries will be served from the buffer (implemented as a hopscotch::Queue).
+/// The value of these settings, as well as the size of the buffer, also
+/// influence how frequently the query to the buffer "lags": that is, if the
+/// subscriber isn't fast enough, the next event of interest may already have
+/// been dropped from the buffer.
+///
+/// Responses served from the buffer are marked [buffered], and responses that
+/// *may* have lagged are marked [buffered, lagged]. The default values for
+/// these parameters are tuned to produce "interesting" traces which contain
+/// fresh items, buffered items, and occasional lag.
+#[structopt(name = "pubsub")]
+#[derive(StructOpt, Copy, Clone, Debug)]
+struct Options {
+    /// Size of the event buffer
+    #[structopt(long, default_value = "100")]
+    buffer_size: usize,
+    /// Interval (ms) between successive published events
+    #[structopt(long, default_value = "10")]
+    publish_millis: u64,
+    /// Delay (ms) between each poll of the publisher, per thread
+    #[structopt(long, default_value = "350")]
+    poll_millis: u64,
+    /// Number of categories in the query
+    #[structopt(long, default_value = "3")]
+    query_size: usize,
+}
+
+const HORIZONTAL_RULE: &str =
+    "────────────────────────────────────────\
+     ────────────────────────────────────────";
 
 #[tokio::main]
 async fn main() {
-    let words = Arc::new(load_words());
+    let options = Options::from_args();
+    let words: &'static _ = Box::leak(Box::new(load_words()));
     let events: Arc<Events<String, String>> =
-        Arc::new(Events::with_capacity(100));
+        Arc::new(Events::with_capacity(options.buffer_size));
+
+    let mut categories = Vec::with_capacity(options.query_size);
+    for _ in 0 .. options.query_size {
+        categories.push(random_key(&words));
+    }
+    println!("{}", HORIZONTAL_RULE);
+    println!("Looking for words from {} categories:", options.query_size);
+    for category in categories.iter() {
+        println!("  • {}", category);
+    }
+    println!("{}", HORIZONTAL_RULE);
 
     // 100 times a second, a new word is added to the buffer, tagged with its
     // category.
     let push_words = words.clone();
     let push_events = events.clone();
     let f = tokio::spawn(async move {
-        let mut interval = time::interval(Duration::from_millis(10));
+        let mut interval =
+            time::interval(Duration::from_millis(options.publish_millis));
         loop {
             let (category, word) = random_key_val(&push_words);
             push_events.push(category.clone(), word.clone()).await;
@@ -35,12 +92,6 @@ async fn main() {
     // buffer to see whether a new one is available, then "processes it" (delays
     // for some time), and then tries again.
     let g = tokio::spawn(async move {
-        let categories = vec![
-            random_key(&words),
-            random_key(&words),
-            random_key(&words),
-        ];
-        println!("Looking for: {:?}\n", categories);
         let mut index = 0;
         let tags = categories.into_iter();
         loop {
@@ -48,7 +99,7 @@ async fn main() {
                 events.after(index, tags.clone()).await;
             println!("{}: {}", category, word);
             index = event_index + 1;
-            tokio::time::delay_for(Duration::from_millis(350)).await;
+            tokio::time::delay_for(Duration::from_millis(options.poll_millis)).await;
         }
     });
 
@@ -115,14 +166,16 @@ impl<K: Ord + Clone, V> Events<K, V> {
         let buffer = self.buffer.read().await;
         let tags = tags.into_iter();
         if let Some(item) = buffer.after(index, tags.clone()) {
-            eprint!("[buffered] ");
             if let Some(earliest) = buffer.earliest() {
                 if index < earliest.index() {
-                    eprint!("[lagged] ");
+                    print!("[buffered, lagging]  ");
+                } else {
+                    print!("[buffered]           ");
                 }
             }
             (item.index(), item.tag().clone(), item.value().clone())
         } else {
+            print!("                     ");
             let mut waiting = self.waiting.lock().await;
             let id = Uuid::new_v4();
             for tag in tags {
@@ -162,11 +215,12 @@ fn lines_iter<Asset: RustEmbed>() -> impl Iterator<Item = (String, Vec<String>)>
     Asset::iter().map(|filename| {
         let contents = Asset::get(&filename).unwrap();
         (
-            filename.replace(".txt", ""),
+            filename.replace(".txt", "").replace('_', " "),
             std::str::from_utf8(&contents)
                 .unwrap()
                 .split('\n')
                 .map(String::from)
+                .map(|s| s.to_uppercase())
                 .filter(|s| !s.is_empty())
                 .collect::<Vec<_>>(),
         )
