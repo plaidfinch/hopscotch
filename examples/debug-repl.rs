@@ -1,11 +1,19 @@
 use hopscotch::Queue;
-use std::io;
+use std::io::{self, Write};
 
 fn main() {
     let mut count = 0;
-    let mut buffer: Queue<usize, usize> = Queue::with_capacity(5);
+    let mut buffer: Queue<usize, usize> = Queue::new();
+    println!("Debug REPL for hopscotch::Queue<usize, usize>");
+    println!("Available commands:\n  \
+                • push <usize>\n  \
+                • pop\n  \
+                • after <u64> [<usize> ...]\n  \
+                • before <u64> [<usize> ...]\n  \
+                • exit");
     loop {
         print!("> ");
+        io::stdout().flush();
         let mut input = String::new();
         match io::stdin().read_line(&mut input) {
             Ok(_) => match input.trim().split(' ').collect::<Vec<_>>().as_slice() {
@@ -29,6 +37,7 @@ fn main() {
                     let r = buffer.before(i.trim().parse().unwrap(), &tags);
                     println!("Result: {:?}", &r);
                 }
+                [""] | ["exit"] | ["quit"] => break,
                 l => println!("Unrecognized command: {:?}", l),
             },
             Err(err) => eprintln!("error: {}", err),
