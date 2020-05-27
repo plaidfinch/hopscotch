@@ -13,7 +13,7 @@ fn main() {
                 • exit");
     loop {
         print!("> ");
-        io::stdout().flush();
+        io::stdout().flush().unwrap();
         let mut input = String::new();
         match io::stdin().read_line(&mut input) {
             Ok(_) => match input.trim().split(' ').collect::<Vec<_>>().as_slice() {
