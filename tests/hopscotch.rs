@@ -107,6 +107,51 @@ quickcheck! {
             compare_double_ended_iters(queue_iter, vec_iter, ordering.into_iter())
         }
     }
+
+    fn partial_eq_correct(
+        left: Vec<(usize, usize)>,
+        right: Vec<(usize, usize)>
+    ) -> bool {
+        let equal_inputs = left == right;
+        let left: hopscotch::Queue<_, _> = left.into_iter().collect();
+        let right: hopscotch::Queue<_, _> = right.into_iter().collect();
+        if equal_inputs {
+            left == right
+        } else {
+            left != right
+        }
+    }
+
+    fn partial_ord_correct(
+        left: Vec<(usize, usize)>,
+        right: Vec<(usize, usize)>
+    ) -> bool {
+        let left: hopscotch::Queue<_, _> = left.into_iter().collect();
+        let right: hopscotch::Queue<_, _> = right.into_iter().collect();
+        let compare_as_iters = left.iter().partial_cmp(right.iter());
+        let compare_directly = left.partial_cmp(&right);
+        compare_as_iters == compare_directly
+    }
+
+    fn ord_correct(
+        left: Vec<(usize, usize)>,
+        right: Vec<(usize, usize)>
+    ) -> bool {
+        let left: hopscotch::Queue<_, _> = left.into_iter().collect();
+        let right: hopscotch::Queue<_, _> = right.into_iter().collect();
+        let compare_as_iters = left.iter().cmp(right.iter());
+        let compare_directly = left.cmp(&right);
+        compare_as_iters == compare_directly
+    }
+}
+
+#[test]
+fn default_is_new() {
+    let q: hopscotch::Queue<usize, usize> = hopscotch::Queue::default();
+    let r: hopscotch::Queue<usize, usize> = hopscotch::Queue::new();
+    if q != r {
+        panic!("Queue::default is not Queue::new")
+    }
 }
 
 /// An enumeration of operations that can be performed on a queue

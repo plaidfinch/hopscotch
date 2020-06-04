@@ -58,6 +58,8 @@ use rpds::RedBlackTreeMap;
 use std::collections::{BTreeMap, VecDeque};
 use std::convert::TryInto;
 use std::iter::FromIterator;
+use std::fmt::Debug;
+use std::hash::{Hash, Hasher};
 
 pub use archery::{ArcK, RcK, SharedPointerKind};
 
@@ -169,7 +171,7 @@ impl<K: Ord, V> AsMut<V> for ItemMut<'_, K, V> {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 struct Info<K: Ord, P: SharedPointerKind> {
     tag: K,
     next_with_tag: usize,
@@ -1443,5 +1445,79 @@ where
             index: item.index,
             tag: unsafe { &*(item.tag as *const _) },
         })
+    }
+}
+
+// Implementing various standard traits for Queues:
+
+impl<K: Clone + Ord + Debug, V: Debug, P: SharedPointerKind> Debug for Queue<K, V, P> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_list().entries(self.iter()).finish()
+    }
+}
+
+impl<K: Clone + Ord + PartialEq, V: PartialEq, P: SharedPointerKind> PartialEq for Queue<K, V, P> {
+    fn eq(&self, other: &Queue<K, V, P>) -> bool {
+        self.offset == other.offset
+            && self.info.iter().zip(other.info.iter()).all(|(i, j)| i.tag == j.tag)
+            && self.values == other.values
+    }
+
+    fn ne(&self, other: &Queue<K, V, P>) -> bool {
+        self.offset != other.offset
+            || self.info.iter().zip(other.info.iter()).any(|(i, j)| i.tag != j.tag)
+            || self.values != other.values
+    }
+}
+
+impl<K: Clone + Ord + Eq, V: Eq, P: SharedPointerKind> Eq for Queue<K, V, P> {
+    // No implementation necessary.
+}
+
+impl<K: Clone + Ord, V: PartialOrd, P: SharedPointerKind> PartialOrd for Queue<K, V, P> {
+    fn partial_cmp(&self, other: &Queue<K, V, P>) -> Option<std::cmp::Ordering> {
+        match self.offset.partial_cmp(&other.offset)? {
+            std::cmp::Ordering::Equal => {
+                let self_tags = self.info.iter().map(|i| &i.tag);
+                let other_tags = other.info.iter().map(|i| &i.tag);
+                match self_tags.partial_cmp(other_tags)? {
+                    std::cmp::Ordering::Equal =>
+                        self.values.iter().partial_cmp(other.values.iter()),
+                    other => Some(other),
+                }
+            },
+            other => Some(other),
+        }
+    }
+}
+
+impl<K: Clone + Ord, V: Ord, P: SharedPointerKind> Ord for Queue<K, V, P> {
+    fn cmp(&self, other: &Queue<K, V, P>) -> std::cmp::Ordering {
+        match self.offset.cmp(&other.offset) {
+            std::cmp::Ordering::Equal => {
+                let self_tags = self.info.iter().map(|i| &i.tag);
+                let other_tags = other.info.iter().map(|i| &i.tag);
+                match self_tags.cmp(other_tags) {
+                    std::cmp::Ordering::Equal =>
+                        self.values.iter().cmp(other.values.iter()),
+                    other => other,
+                }
+            },
+            other => other,
+        }
+    }
+}
+
+impl<K: Clone + Ord, V, P: SharedPointerKind> std::default::Default for Queue<K, V, P> {
+    fn default() -> Queue<K, V, P> {
+        Queue::new()
+    }
+}
+
+impl<K: Clone + Ord + Hash, V: Hash, P: SharedPointerKind> Hash for Queue<K, V, P> {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.offset.hash(state);
+        self.info.iter().for_each(|i| i.tag.hash(state));
+        self.values.iter().for_each(|v| v.hash(state));
     }
 }

@@ -22,11 +22,13 @@ fn main() {
                 ["push", k] => {
                     let tag = k.trim().parse().unwrap();
                     let i = buffer.push(tag, count);
+                    println!("Queue: {:?}", buffer);
                     println!("Result: {:?}", i);
                     count += 1;
                 }
                 ["pop"] => {
                     let r = buffer.pop();
+                    println!("Queue: {:?}", buffer);
                     println!("Result: {:?}", r);
                 }
                 ["after", i, ks @ ..] => {
