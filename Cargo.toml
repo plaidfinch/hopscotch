@@ -22,7 +22,7 @@ harness = false
 
 [dependencies]
 rpds = "0.7"
-archery = "0.3"
+archery = "0.4"
 
 [dev-dependencies]
 quickcheck = "0.9"
