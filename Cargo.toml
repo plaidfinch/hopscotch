@@ -21,7 +21,7 @@ path = "benches/2d.rs"
 harness = false
 
 [dependencies]
-rpds = "0.7"
+rpds = "0.9"
 archery = "0.4"
 
 [dev-dependencies]
